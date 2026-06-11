@@ -81,7 +81,8 @@ func mumCek(_ sembol: String, borsaIstanbul: Bool = true) async -> [Mum] {
             continue
         }
         if let m = mumAyikla(veri) { return m }
-        sonHataNotu = "\(ham): parse boş (deneme \(deneme + 1))"
+        let parca = String(data: veri.prefix(200), encoding: .utf8) ?? "ikili veri"
+        sonHataNotu = "\(ham): parse boş (deneme \(deneme + 1)) gövde: \(parca)"
         try? await Task.sleep(nanoseconds: 1_000_000_000)
     }
     return []
