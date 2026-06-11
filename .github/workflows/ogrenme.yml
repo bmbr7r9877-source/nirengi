@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.0       # Cekirdek saf Foundation → Linux'ta sorunsuz koşar
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Öğrenme robotunu çalıştır
         run: swift run --package-path Cekirdek -c release ogrenme
