@@ -51,6 +51,25 @@ func dosyaYaz<T: Encodable>(_ yol: String, _ deger: T) {
 }
 
 var sonHataNotu = ""   // teşhis: son başarısızlığın sebebi (log için)
+var yahooCrumb = ""    // çerez+crumb (datacenter IP'lerde hisse verisi için gerekebiliyor)
+
+/// Yahoo çerez + crumb akışı (TemelVeriServisi ile aynı yöntem):
+/// fc.yahoo.com → çerez (URLSession.shared otomatik saklar) → /v1/test/getcrumb → crumb.
+/// GitHub Actions IP'lerinde chart ucu BIST hisseleri için çerezsiz META-ONLY dönüyor.
+@MainActor
+func yahooIsinmasi() async {
+    var c = URLRequest(url: URL(string: "https://fc.yahoo.com")!)
+    c.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+    _ = try? await URLSession.shared.data(for: c)   // sonucu önemsiz, çerez yeter
+
+    var k = URLRequest(url: URL(string: "https://query1.finance.yahoo.com/v1/test/getcrumb")!)
+    k.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+    if let (veri, _) = try? await URLSession.shared.data(for: k),
+       let s = String(data: veri, encoding: .utf8), !s.isEmpty, !s.contains("Unauthorized") {
+        yahooCrumb = s
+    }
+    print("🍪 Yahoo ısınması: crumb \(yahooCrumb.isEmpty ? "ALINAMADI" : "alındı")")
+}
 
 /// Yahoo Finance chart ucundan günlük mumları çeker (Linux/macOS uyumlu, key'siz).
 /// borsaIstanbul=false → sembole .IS eklenmez (makro: ^VIX, GC=F, USDTRY=X...).
@@ -65,7 +84,8 @@ func mumCek(_ sembol: String, borsaIstanbul: Bool = true) async -> [Mum] {
     // geçersiz aralık (örn. "8mo") bazı sembollerde TEK bar döndürüyor.
     for deneme in 0..<3 {
         let host = deneme % 2 == 0 ? "query1" : "query2"
-        let url = URL(string: "https://\(host).finance.yahoo.com/v8/finance/chart/\(kodlu)?range=2y&interval=1d")!
+        let crumbEki = yahooCrumb.isEmpty ? "" : "&crumb=\(yahooCrumb.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+        let url = URL(string: "https://\(host).finance.yahoo.com/v8/finance/chart/\(kodlu)?range=2y&interval=1d\(crumbEki)")!
         var istek = URLRequest(url: url)
         istek.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
         istek.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -145,6 +165,8 @@ let takvim = Calendar(identifier: .gregorian)
 let bugun = Date()
 var sicil = dosyaOku(sicilYol, [SicilKaydi].self) ?? []
 print("📒 Mevcut sicil: \(sicil.count) kayıt (\(sicil.filter { $0.olgun }.count) olgun)")
+
+await yahooIsinmasi()
 
 // Sembol → mumlar (bir kez çek, hem skor hem değerlendirme için).
 var mumHaritasi: [String: [Mum]] = [:]
