@@ -4,6 +4,7 @@ import SwiftUI
 struct AyarlarView: View {
     @State private var anthropicKey = UserDefaults.standard.string(forKey: "anthropic_key") ?? ""
     @State private var ogrenmeURL = UserDefaults.standard.string(forKey: "ogrenme_base_url") ?? ""
+    @State private var ogrenmeDurum = "Cihazda öğrenme: yükleniyor…"
 
     var body: some View {
         NavigationStack {
@@ -28,16 +29,28 @@ struct AyarlarView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 12) {
                                 Image(systemName: "brain").foregroundColor(Tema.turuncu).frame(width: 24)
-                                TextField("github raw kök URL'si", text: $ogrenmeURL)
+                                Text(ogrenmeDurum).foregroundColor(Tema.metin).font(.subheadline)
+                            }
+                            Text("Uygulama kullanıldıkça tahminler cihazında birikir; Ay ve Güneş motorları bu geçmişten öğrenir. Kurulum gerektirmez.")
+                                .font(.caption2).foregroundColor(Tema.gri)
+                            HStack(spacing: 12) {
+                                Image(systemName: "icloud.and.arrow.down").foregroundColor(Tema.turuncu).frame(width: 24)
+                                TextField("uzak kaynak URL (opsiyonel)", text: $ogrenmeURL)
                                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                                     .onChange(of: ogrenmeURL) { _, yeni in
                                         UserDefaults.standard.set(yeni.trimmingCharacters(in: .whitespaces), forKey: "ogrenme_base_url")
                                     }
                             }
-                            Text("Öğrenme robotunun (GitHub Actions) ürettiği ağırlık/kalibrasyonu indirir. Örn: https://raw.githubusercontent.com/kullanici/nirengi/main")
+                            Text("İsteğe bağlı: bir robotun ürettiği öğrenme verisi de kullanılabilir. Boş bırakılabilir.")
                                 .font(.caption2).foregroundColor(Tema.gri)
                         }
                         .padding(.horizontal, 14).padding(.vertical, 14)
+                        .task {
+                            let d = await OgrenmeDeposu.shared.durum()
+                            ogrenmeDurum = d.kayit == 0
+                                ? "Cihazda öğrenme: henüz kayıt yok"
+                                : "Cihazda \(d.kayit) tahmin · \(d.olgun) sonuçlandı"
+                        }
                     }
                     grup("Genel") {
                         satir(ikon: "bell", "Bildirimler")

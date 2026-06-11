@@ -106,6 +106,22 @@ final class PiyasaModel: ObservableObject {
 
         yukleniyor = false
         if hisseler.isEmpty { hata = "Veri alınamadı. Bağlantını kontrol et." }
+
+        // Cihaz içi öğrenme: liste hazır olunca sicile günün tahminlerini yaz,
+        // ufku dolanları değerlendir, Ay/Güneş'i güncelle (arka planda, günde bir).
+        let girdiler = hisseler.filter { !$0.endeksMi }.map {
+            OgrenmeDeposu.HisseGirdisi(
+                sembol: $0.sembol, mumlar: $0.mumlar,
+                merkur: Katki(motor: "Merkür", skor: $0.sonuc.skor, guven: 0.8, gerekce: $0.sonuc.verdict))
+        }
+        var sektorler: [String: [Mum]] = [:]
+        for h in hisseler where h.endeksMi { sektorler[h.sembol] = h.mumlar }
+        let jupiter = jupiterRejim.map {
+            Katki(motor: "Jüpiter", skor: $0.skor, guven: 0.6, gerekce: $0.rejim.rawValue)
+        }
+        Task.detached(priority: .utility) {
+            await OgrenmeDeposu.shared.gunlukDongu(hisseler: girdiler, sektorMumlari: sektorler, jupiter: jupiter)
+        }
     }
 
     nonisolated static func tekHisse(sembol: String, ad: String, endeksMi: Bool = false) async -> HisseSatiri? {

@@ -1,35 +1,33 @@
 import Foundation
 import Cekirdek
 
-/// Öğrenme istemcisi — GitHub Actions robotunun ürettiği öğrenilmiş ağırlık (Ay) ve
-/// kalibrasyonu (Güneş) uzak JSON'dan indirir, Konsey'e uygular.
+/// Öğrenilmiş ağırlık (Ay) ve kalibrasyonun (Güneş) tüketim noktası.
 ///
-/// Robot her iş günü `data/agirliklar.json` + `data/kalibrasyon.json` üretip repo'ya
-/// commit eder. App bu ham (raw.githubusercontent) URL'leri okur. URL Ayarlar'dan
-/// girilir (UserDefaults "ogrenme_base_url"); boşsa servis sessizce devre dışı (no-op)
-/// ve Konsey varsayılan ağırlıklarla çalışır.
+/// İki kaynak olabilir:
+///   1. CİHAZ (varsayılan): OgrenmeDeposu — uygulama kullanıldıkça telefonda biriken sicil.
+///   2. UZAK (opsiyonel): Ayarlar'a raw URL girilirse bir robotun ürettiği JSON da indirilir.
+/// İkisi de varsa ÖRNEK SAYISI BÜYÜK olan kazanır (daha çok kanıt = daha güvenilir).
 actor OgrenmeServisi {
     static let shared = OgrenmeServisi()
 
-    private var agirliklar: OgrenilmisAgirliklar?
-    private var kalibrasyon: Kalibrasyon?
-    private var yuklendi = false
+    private var uzakAgirliklar: OgrenilmisAgirliklar?
+    private var uzakKalibrasyon: Kalibrasyon?
+    private var uzakYuklendi = false
 
-    /// Robot çıktısının bulunduğu kök URL (data/ klasörünün üst dizini).
-    /// Örn: https://raw.githubusercontent.com/<kullanici>/<repo>/main
+    /// Robot çıktısının kök URL'si (boşsa uzak kaynak devre dışı).
     private var taban: String? {
         let s = UserDefaults.standard.string(forKey: "ogrenme_base_url") ?? ""
         return s.isEmpty ? nil : s
     }
 
-    /// Uzak JSON'ları bir kez indirir (varsa).
+    /// Uzak JSON'ları bir kez indirir (URL girilmişse).
     func yukle() async {
-        guard !yuklendi, let taban else { return }
-        yuklendi = true
+        guard !uzakYuklendi, let taban else { return }
+        uzakYuklendi = true
         let cozucu = JSONDecoder()
         cozucu.dateDecodingStrategy = .iso8601
-        agirliklar = await indir("\(taban)/data/agirliklar.json", OgrenilmisAgirliklar.self, cozucu)
-        kalibrasyon = await indir("\(taban)/data/kalibrasyon.json", Kalibrasyon.self, cozucu)
+        uzakAgirliklar = await indir("\(taban)/data/agirliklar.json", OgrenilmisAgirliklar.self, cozucu)
+        uzakKalibrasyon = await indir("\(taban)/data/kalibrasyon.json", Kalibrasyon.self, cozucu)
     }
 
     private func indir<T: Decodable>(_ url: String, _ tip: T.Type, _ cozucu: JSONDecoder) async -> T? {
@@ -38,23 +36,33 @@ actor OgrenmeServisi {
         return try? cozucu.decode(T.self, from: veri)
     }
 
-    /// Öğrenilmiş çarpanlarla harmanlanmış Konsey ağırlıkları (yoksa varsayılan).
-    func etkinAgirliklar() -> [String: Double] {
+    /// Etkin Konsey ağırlıkları: varsayılan × (cihaz/uzak hangisi daha çok örnekliyse onun çarpanı).
+    func etkinAgirliklar() async -> [String: Double] {
+        let yerel = await OgrenmeDeposu.shared.mevcutAgirliklar()
+        let secilen: OgrenilmisAgirliklar?
+        switch (yerel, uzakAgirliklar) {
+        case let (y?, u?): secilen = y.ornekSayisi >= u.ornekSayisi ? y : u
+        case let (y?, nil): secilen = y
+        case let (nil, u?): secilen = u
+        default: secilen = nil
+        }
         var w = Konsey.varsayilanAgirliklar
-        if let c = agirliklar?.carpanlar {
-            for (motor, carpan) in c where w[motor] != nil {
+        if let carpanlar = secilen?.carpanlar {
+            for (motor, carpan) in carpanlar where w[motor] != nil {
                 w[motor]! *= carpan
             }
         }
         return w
     }
 
-    /// Güneş kalibrasyonunu bir skora uygular (yoksa skoru olduğu gibi döndürür).
-    func kalibreEt(_ skor: Double) -> Double {
-        guard let k = kalibrasyon else { return skor }
-        return Gunes.uygula(skor, k)
+    /// Etkin kalibrasyon (yoksa nil → skor olduğu gibi kalır).
+    func mevcutKalibrasyon() async -> Kalibrasyon? {
+        let yerel = await OgrenmeDeposu.shared.mevcutKalibrasyon()
+        switch (yerel, uzakKalibrasyon) {
+        case let (y?, u?): return y.ornekSayisi >= u.ornekSayisi ? y : u
+        case let (y?, nil): return y
+        case let (nil, u?): return u
+        default: return nil
+        }
     }
-
-    /// Şeffaflık için: yüklenen kalibrasyon (UI'da "model güveni" göstermek için).
-    func mevcutKalibrasyon() -> Kalibrasyon? { kalibrasyon }
 }
