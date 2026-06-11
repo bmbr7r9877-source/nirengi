@@ -50,25 +50,52 @@ func dosyaYaz<T: Encodable>(_ yol: String, _ deger: T) {
     }
 }
 
+var sonHataNotu = ""   // teşhis: son başarısızlığın sebebi (log için)
+
 /// Yahoo Finance chart ucundan günlük mumları çeker (Linux/macOS uyumlu, key'siz).
 /// borsaIstanbul=false → sembole .IS eklenmez (makro: ^VIX, GC=F, USDTRY=X...).
+/// GitHub Actions IP'lerinde Yahoo agresif rate-limit uygular → 3 deneme,
+/// artan bekleme, query1/query2 host dönüşümü.
+@MainActor
 func mumCek(_ sembol: String, borsaIstanbul: Bool = true) async -> [Mum] {
     let ham = borsaIstanbul ? "\(sembol).IS" : sembol
     let kodlu = ham.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ham
     // range=2y: Mars 12-1 momentumu (~13 ay) + Uranüs MA200 rejimi tam veriyle çalışsın.
     // DİKKAT: Yahoo sadece belirli aralıkları tanır (1mo/3mo/6mo/1y/2y/5y...);
     // geçersiz aralık (örn. "8mo") bazı sembollerde TEK bar döndürüyor.
-    let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(kodlu)?range=2y&interval=1d")!
-    var istek = URLRequest(url: url)
-    istek.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", forHTTPHeaderField: "User-Agent")
-    guard let (veri, _) = try? await URLSession.shared.data(for: istek),
-          let kok = (try? JSONSerialization.jsonObject(with: veri)) as? [String: Any],
+    for deneme in 0..<3 {
+        let host = deneme % 2 == 0 ? "query1" : "query2"
+        let url = URL(string: "https://\(host).finance.yahoo.com/v8/finance/chart/\(kodlu)?range=2y&interval=1d")!
+        var istek = URLRequest(url: url)
+        istek.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        istek.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        guard let (veri, yanit) = try? await URLSession.shared.data(for: istek) else {
+            sonHataNotu = "\(ham): ağ hatası (deneme \(deneme + 1))"
+            try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 * (deneme + 1)))
+            continue
+        }
+        if let http = yanit as? HTTPURLResponse, http.statusCode != 200 {
+            sonHataNotu = "\(ham): HTTP \(http.statusCode) (deneme \(deneme + 1))"
+            try? await Task.sleep(nanoseconds: UInt64(3_000_000_000 * (deneme + 1)))   // 429 soğuması
+            continue
+        }
+        if let m = mumAyikla(veri) { return m }
+        sonHataNotu = "\(ham): parse boş (deneme \(deneme + 1))"
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+    return []
+}
+
+/// Yahoo chart JSON gövdesinden mum dizisi çıkarır.
+func mumAyikla(_ veri: Data) -> [Mum]? {
+    guard let kok = (try? JSONSerialization.jsonObject(with: veri)) as? [String: Any],
           let chart = kok["chart"] as? [String: Any],
           let sonuc = (chart["result"] as? [[String: Any]])?.first,
           let zaman = sonuc["timestamp"] as? [Double],
           let gostergeler = sonuc["indicators"] as? [String: Any],
           let quote = (gostergeler["quote"] as? [[String: Any]])?.first
-    else { return [] }
+    else { return nil }
 
     let acilis = quote["open"] as? [Double?] ?? []
     let yuksek = quote["high"] as? [Double?] ?? []
@@ -85,7 +112,7 @@ func mumCek(_ sembol: String, borsaIstanbul: Bool = true) async -> [Mum] {
                           acilis: a, yuksek: y, dusuk: d, kapanis: k,
                           hacim: (hacim[safe: i] ?? nil) ?? 0))
     }
-    return mumlar
+    return mumlar.isEmpty ? nil : mumlar
 }
 
 extension Array {
@@ -125,7 +152,13 @@ for sembol in semboller {
     if !m.isEmpty { mumHaritasi[sembol] = m.sorted { $0.tarih < $1.tarih } }
     try? await Task.sleep(nanoseconds: 400_000_000)   // rate-limit dostu
 }
-print("📥 Çekilen sembol: \(mumHaritasi.count)/\(semboller.count)")
+print("📥 Çekilen sembol: \(mumHaritasi.count)/\(semboller.count)\(sonHataNotu.isEmpty ? "" : " | son hata: \(sonHataNotu)")")
+
+// Yarıdan azı çekildiyse veri günü temsil etmiyor — sicile YANLIŞ tahmin yazma, çık.
+guard mumHaritasi.count >= semboller.count / 2 else {
+    print("⛔️ Çok az sembol çekilebildi (rate-limit?) — bugünkü koşu atlanıyor, sicil değişmedi.")
+    exit(0)
+}
 
 // Sektör endeksleri + XU100 (Uranüs girdisi).
 var endeksMumlari: [String: [Mum]] = [:]
