@@ -11,26 +11,9 @@ final class PiyasaModel: ObservableObject {
 
     // MARK: - Listeler (alfabetik)
 
-    /// BIST 100 — tam liste (alfabetik). Bazı semboller zamanla değişebilir;
-    /// Yahoo'da bulunmayan/çekilmeyen sembol sessizce atlanır.
-    let bist100: [String] = [
-        "AEFES","AGHOL","AKBNK","AKCNS","AKFGY","AKSA","AKSEN","ALARK","ALBRK","ALFAS",
-        "ARCLK","ASELS","ASTOR","AYDEM","BERA","BIMAS","BIOEN","BRSAN","BRYAT","BUCIM",
-        "CCOLA","CIMSA","CWENE","DOAS","DOHOL","ECILC","EGEEN","EKGYO","ENJSA","ENKAI",
-        "EREGL","EUPWR","FROTO","GARAN","GESAN","GLYHO","GUBRF","GWIND","HALKB","HEKTS",
-        "ISCTR","ISDMR","ISGYO","ISMEN","KARSN","KCAER","KCHOL","KMPUR","KONTR","KONYA",
-        "KORDS","KOZAA","KOZAL","KRDMD","MAVI","MGROS","MIATK","ODAS","OTKAR","OYAKC",
-        "PETKM","PGSUS","PSGYO","QUAGR","SAHOL","SASA","SAYAS","SISE","SKBNK","SMRTG",
-        "SOKM","TAVHL","TCELL","THYAO","TKFEN","TMSN","TOASO","TSKB","TTKOM","TTRAK",
-        "TUKAS","TUPRS","TURSG","ULKER","VAKBN","VESBE","VESTL","YEOTK","YKBNK","ZOREN",
-    ]
-
-    /// BIST 30 — alfabetik (BIST 100'ün alt kümesi).
-    let bist30: [String] = [
-        "AKBNK","ALARK","ARCLK","ASELS","ASTOR","BIMAS","BRSAN","EKGYO","ENKAI","EREGL",
-        "FROTO","GARAN","GUBRF","HEKTS","ISCTR","KCHOL","KONTR","KOZAL","KRDMD","MGROS",
-        "OYAKC","PETKM","PGSUS","SAHOL","SASA","SISE","TCELL","THYAO","TOASO","TUPRS",
-    ]
+    /// BIST 100 / 30 — paylaşılan evren (Cekirdek.BistEvren; robot da aynı listeyi kullanır).
+    let bist100 = BistEvren.bist100
+    let bist30 = BistEvren.bist30
 
     /// BIST endeksleri (Yahoo'da .IS ile mevcut) — hisse gibi gösterilir.
     let endeksler: [String] = [
@@ -77,48 +60,8 @@ final class PiyasaModel: ObservableObject {
         listem = Set(UserDefaults.standard.stringArray(forKey: "listem_v1") ?? [])
     }
 
-    /// Hisse → sektör endeksi eşlemesi (Uranüs için; kaba eşleme, ileride rafine edilir).
-    /// Eşlemesi olmayan hissede Uranüs skor üretmez.
-    let sektorHaritasi: [String: String] = [
-        // Banka
-        "AKBNK":"XBANK","GARAN":"XBANK","HALKB":"XBANK","ISCTR":"XBANK","SKBNK":"XBANK",
-        "TSKB":"XBANK","VAKBN":"XBANK","YKBNK":"XBANK","ALBRK":"XBANK",
-        // Holding
-        "AGHOL":"XHOLD","ALARK":"XHOLD","DOHOL":"XHOLD","KCHOL":"XHOLD","SAHOL":"XHOLD",
-        "GLYHO":"XHOLD","BERA":"XHOLD","BRYAT":"XHOLD",
-        // Kimya / petrokimya / gübre
-        "SASA":"XKMYA","PETKM":"XKMYA","TUPRS":"XKMYA","GUBRF":"XKMYA","HEKTS":"XKMYA",
-        "AKSA":"XKMYA","KMPUR":"XKMYA",
-        // Metal ana
-        "EREGL":"XMANA","ISDMR":"XMANA","KRDMD":"XMANA","KCAER":"XMANA","BRSAN":"XMANA",
-        // Madencilik
-        "KOZAL":"XMADN","KOZAA":"XMADN",
-        // Ulaştırma
-        "THYAO":"XULAS","PGSUS":"XULAS","TAVHL":"XULAS",
-        // İletişim
-        "TCELL":"XILTM","TTKOM":"XILTM",
-        // GMYO
-        "EKGYO":"XGMYO","ISGYO":"XGMYO","AKFGY":"XGMYO","PSGYO":"XGMYO",
-        // Elektrik / enerji
-        "AKSEN":"XELKT","AYDEM":"XELKT","ZOREN":"XELKT","ODAS":"XELKT","ENJSA":"XELKT",
-        "GWIND":"XELKT","CWENE":"XELKT","BIOEN":"XELKT","EUPWR":"XELKT",
-        // Ticaret / perakende
-        "BIMAS":"XTCRT","MGROS":"XTCRT","SOKM":"XTCRT","DOAS":"XTCRT",
-        // Gıda içecek
-        "AEFES":"XGIDA","CCOLA":"XGIDA","ULKER":"XGIDA","TUKAS":"XGIDA",
-        // Sınai (çimento/cam/oto/savunma/diğer imalat)
-        "ASELS":"XUSIN","SISE":"XUSIN","ARCLK":"XUSIN","FROTO":"XUSIN","TOASO":"XUSIN",
-        "OTKAR":"XUSIN","TTRAK":"XUSIN","TMSN":"XUSIN","VESTL":"XUSIN","VESBE":"XUSIN",
-        "AKCNS":"XUSIN","CIMSA":"XUSIN","OYAKC":"XUSIN","BUCIM":"XUSIN","KONYA":"XUSIN",
-        "EGEEN":"XUSIN","KARSN":"XUSIN","KORDS":"XUSIN","ASTOR":"XUSIN","GESAN":"XUSIN",
-        "KONTR":"XUSIN","SMRTG":"XUSIN","YEOTK":"XUSIN","MIATK":"XUTEK",
-        // İnşaat
-        "ENKAI":"XINSA",
-        // Sigorta
-        "TURSG":"XSGRT",
-        // Turizm / tekstil-giyim (yaklaşık)
-        "MAVI":"XTCRT",
-    ]
+    /// Hisse → sektör endeksi eşlemesi (Uranüs için; paylaşılan evrenden).
+    let sektorHaritasi = BistEvren.sektorHaritasi
 
     /// Uranüs (sektör rotasyonu) katkısı — hisse + sektör endeksi + XU100 hazırsa.
     func uranusSonucu(_ satir: HisseSatiri) -> Uranus.HisseSonuc? {

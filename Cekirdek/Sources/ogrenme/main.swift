@@ -19,12 +19,10 @@ let sicilYol = "\(veriKlasor)/sicil.json"
 let agirlikYol = "\(veriKlasor)/agirliklar.json"
 let kalibrasyonYol = "\(veriKlasor)/kalibrasyon.json"
 
-// BIST 30 (öğrenme evreni — hafif tutuldu; rate-limit dostu).
-let semboller = [
-    "AKBNK","ARCLK","ASELS","BIMAS","EKGYO","ENKAI","EREGL","FROTO","GARAN","GUBRF",
-    "HEKTS","ISCTR","KCHOL","KOZAL","KRDMD","PETKM","PGSUS","SAHOL","SASA","SISE",
-    "TCELL","THYAO","TOASO","TUPRS","VAKBN","YKBNK","TTKOM","BRSAN","ODAS","KONTR"
-]
+// Öğrenme evreni: BIST 100 (app ile paylaşılan liste).
+// Ek çekilenler: sektör endeksleri + XU100 (Uranüs) ve makro semboller (Jüpiter).
+let semboller = BistEvren.bist100
+let endeksler = BistEvren.sektorEndeksleri + ["XU100"]
 
 // MARK: - Yardımcılar
 
@@ -53,8 +51,14 @@ func dosyaYaz<T: Encodable>(_ yol: String, _ deger: T) {
 }
 
 /// Yahoo Finance chart ucundan günlük mumları çeker (Linux/macOS uyumlu, key'siz).
-func mumCek(_ sembol: String) async -> [Mum] {
-    let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(sembol).IS?range=8mo&interval=1d")!
+/// borsaIstanbul=false → sembole .IS eklenmez (makro: ^VIX, GC=F, USDTRY=X...).
+func mumCek(_ sembol: String, borsaIstanbul: Bool = true) async -> [Mum] {
+    let ham = borsaIstanbul ? "\(sembol).IS" : sembol
+    let kodlu = ham.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ham
+    // range=2y: Mars 12-1 momentumu (~13 ay) + Uranüs MA200 rejimi tam veriyle çalışsın.
+    // DİKKAT: Yahoo sadece belirli aralıkları tanır (1mo/3mo/6mo/1y/2y/5y...);
+    // geçersiz aralık (örn. "8mo") bazı sembollerde TEK bar döndürüyor.
+    let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(kodlu)?range=2y&interval=1d")!
     var istek = URLRequest(url: url)
     istek.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", forHTTPHeaderField: "User-Agent")
     guard let (veri, _) = try? await URLSession.shared.data(for: istek),
@@ -88,13 +92,22 @@ extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }
 
-/// Fiyat-bazlı motorlarla skorla → katkılar (Linux'ta ek veri kaynağı gerekmez).
-func skorla(_ mumlar: [Mum]) -> [Katki] {
+/// Fiyat + endeks + makro ile skorla → 6 motor katkısı (Satürn/Venüs hariç:
+/// temel veri ve haber/LLM robotta yok; eklenince sicil onları da öğrenir).
+func skorla(_ sembol: String, _ mumlar: [Mum],
+            endeksMumlari: [String: [Mum]], jupiterKatki: Katki?) -> [Katki] {
     var k: [Katki] = []
     if let m = Merkur().degerlendir(mumlar) { k.append(m) }
     if let n = Neptun().degerlendir(mumlar) { k.append(n) }
     if let mr = Mars().katki(mumlar) { k.append(mr) }
     if let p = Pluton().katki(mumlar) { k.append(p) }
+    if let sektorKodu = BistEvren.sektorHaritasi[sembol],
+       let sektor = endeksMumlari[sektorKodu],
+       let xu100 = endeksMumlari["XU100"],
+       let u = Uranus().katki(hisse: mumlar, sektor: sektor, benchmark: xu100) {
+        k.append(u)
+    }
+    if let j = jupiterKatki { k.append(j) }   // piyasa geneli — tüm hisselerde aynı
     return k
 }
 
@@ -113,6 +126,63 @@ for sembol in semboller {
     try? await Task.sleep(nanoseconds: 400_000_000)   // rate-limit dostu
 }
 print("📥 Çekilen sembol: \(mumHaritasi.count)/\(semboller.count)")
+
+// Sektör endeksleri + XU100 (Uranüs girdisi).
+var endeksMumlari: [String: [Mum]] = [:]
+for endeks in endeksler {
+    let m = await mumCek(endeks)
+    if !m.isEmpty { endeksMumlari[endeks] = m.sorted { $0.tarih < $1.tarih } }
+    try? await Task.sleep(nanoseconds: 400_000_000)
+}
+
+/// Üye hisselerin eşit ağırlıklı, normalize kapanış ortalamasından sentetik endeks.
+/// Yahoo çoğu BIST sektör endeksi için GEÇMİŞ VERMİYOR (sadece son fiyat; yalnız
+/// XBANK/XUSIN/XU100 tam) — rotasyon sinyali için eşit ağırlıklı vekil yeterli.
+func sentetikEndeks(_ uyeSerileri: [[Mum]]) -> [Mum] {
+    var oranlar: [Date: [Double]] = [:]
+    for seri in uyeSerileri {
+        guard let ilk = seri.first?.kapanis, ilk > 0 else { continue }
+        for m in seri {
+            oranlar[takvim.startOfDay(for: m.tarih), default: []].append(m.kapanis / ilk)
+        }
+    }
+    let minUye = max(2, uyeSerileri.count / 2)   // yarıdan az üyeli gün atlanır
+    return oranlar.compactMap { gun, o -> Mum? in
+        guard o.count >= minUye else { return nil }
+        let ort = o.reduce(0, +) / Double(o.count) * 100
+        return Mum(tarih: gun, acilis: ort, yuksek: ort, dusuk: ort, kapanis: ort, hacim: 0)
+    }
+    .sorted { $0.tarih < $1.tarih }
+}
+
+// Geçmişi eksik sektör endekslerini sentetikle doldur.
+var sentetikSayisi = 0
+for sektorKodu in BistEvren.sektorEndeksleri where (endeksMumlari[sektorKodu]?.count ?? 0) < 60 {
+    let uyeler = BistEvren.sektorHaritasi.filter { $0.value == sektorKodu }.map(\.key)
+    let seriler = uyeler.compactMap { mumHaritasi[$0] }
+    guard seriler.count >= 2 else { continue }
+    endeksMumlari[sektorKodu] = sentetikEndeks(seriler)
+    sentetikSayisi += 1
+}
+print("📥 Çekilen endeks: \(endeksMumlari.count)/\(endeksler.count) (\(sentetikSayisi) sentetik)")
+
+// Makro seriler (Jüpiter girdisi) — bir kez, piyasa geneli.
+var makro = MakroGirdi()
+for (alan, yahooSembol) in BistEvren.makroSemboller {
+    let kapanis = await mumCek(yahooSembol, borsaIstanbul: false).map(\.kapanis)
+    switch alan {
+    case "vix":     makro.vix = kapanis
+    case "spy":     makro.spy = kapanis
+    case "dxy":     makro.dxy = kapanis
+    case "faiz10y": makro.faiz10y = kapanis
+    case "altin":   makro.altin = kapanis
+    case "usdtry":  makro.usdtry = kapanis
+    default: break
+    }
+    try? await Task.sleep(nanoseconds: 400_000_000)
+}
+let jupiterKatki = Jupiter().katki(makro)
+print("📥 Jüpiter: \(jupiterKatki.map { String(format: "skor %.0f", $0.skor) } ?? "veri yetersiz")")
 
 // 1) Olgun tahminleri değerlendir.
 var degerlendirilen = 0
@@ -135,7 +205,7 @@ var eklenen = 0
 for (sembol, mumlar) in mumHaritasi {
     let varMi = sicil.contains { $0.sembol == sembol && takvim.isDate($0.tarih, inSameDayAs: bugunGun) }
     guard !varMi, let sonFiyat = mumlar.last?.kapanis else { continue }
-    let katkilar = skorla(mumlar)
+    let katkilar = skorla(sembol, mumlar, endeksMumlari: endeksMumlari, jupiterKatki: jupiterKatki)
     guard !katkilar.isEmpty else { continue }
     let b = Konsey.harmanla(katkilar, agirliklar: Konsey.varsayilanAgirliklar)
     let motorlar = Dictionary(uniqueKeysWithValues: katkilar.map { ($0.motor, MotorOyu(skor: $0.skor, guven: $0.guven)) })
