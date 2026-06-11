@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# R
+.Rhistory
+
+# Swift Package Manager / build çıktıları
+.build/
+Cekirdek/.build/
+*.o
+*.swiftmodule
+
+# Xcode
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+build/
+
+# data/ COMMIT EDİLİR — öğrenme robotunun sicili/ağırlıkları burada yaşar (yoksay YOK)

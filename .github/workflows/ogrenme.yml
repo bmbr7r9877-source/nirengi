@@ -1,0 +1,39 @@
+name: Nirengi Günlük Öğrenme
+
+# Ay (ağırlık öğrenme) + Güneş (kalibrasyon) motorlarının altyapısı.
+# Her iş günü BIST kapanışından sonra koşar:
+#   1. Fiyatları çek, hisseleri skorla, tahminleri sicile ekle
+#   2. Olgunlaşmış eski tahminleri gerçekleşen fiyatla değerlendir
+#   3. Ay + Güneş'i koş → data/*.json güncelle ve repo'ya commit et
+# iOS app bu JSON'ları okuyup öğrenilmiş ağırlık/kalibrasyonu kullanır.
+
+on:
+  schedule:
+    - cron: "0 16 * * 1-5"   # Hafta içi 16:00 UTC (BIST kapanışı 18:00 TR sonrası)
+  workflow_dispatch: {}       # Elle de tetiklenebilir
+
+permissions:
+  contents: write             # data/ değişikliklerini commit etmek için
+
+jobs:
+  ogren:
+    runs-on: ubuntu-latest
+    container: swift:6.0       # Cekirdek saf Foundation → Linux'ta sorunsuz koşar
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Öğrenme robotunu çalıştır
+        run: swift run --package-path Cekirdek -c release ogrenme
+
+      - name: Sonuçları commit'le
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name  "nirengi-robot"
+          git config user.email "robot@nirengi.local"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Değişiklik yok."
+          else
+            git commit -m "🤖 Günlük öğrenme: sicil + ağırlık + kalibrasyon güncellendi"
+            git push
+          fi
