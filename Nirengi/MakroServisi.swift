@@ -27,7 +27,7 @@ actor MakroServisi {
     }
 
     private func seri(_ sembol: String) async -> [Double] {
-        guard let s = try? await YahooBistServisi.cek(sembol: sembol, aralik: "6mo", interval: "1d", borsaIstanbul: false) else { return [] }
+        guard let s = try? await VeriMerkezi.cek(sembol: sembol, aralik: "6mo", interval: "1d", borsaIstanbul: false) else { return [] }
         return s.mumlar.map(\.kapanis)
     }
 }

@@ -126,7 +126,7 @@ final class PiyasaModel: ObservableObject {
 
     nonisolated static func tekHisse(sembol: String, ad: String, endeksMi: Bool = false) async -> HisseSatiri? {
         do {
-            let veri = try await YahooBistServisi.cek(sembol: sembol)
+            let veri = try await VeriMerkezi.cek(sembol: sembol)
             guard let sonuc = Merkur().degerlendir(veri.mumlar, endeks: nil) else { return nil }
             let deg = veri.oncekiKapanis > 0
                 ? (veri.fiyat - veri.oncekiKapanis) / veri.oncekiKapanis * 100 : 0

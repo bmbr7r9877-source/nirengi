@@ -75,10 +75,15 @@ struct DetayView: View {
         }
         .task {
             // Satürn — endeks değilse temel veriyi çek (Yahoo quoteSummary).
-            if saturnSonuc == nil && !satir.endeksMi {
+            // BIST finansallarında (banka/sigorta/leasing) Satürn KAPALI: sanayi
+            // şirketine göre ayarlı bantlar bu bilançolarda yanıltıcı skor üretir.
+            // Temel veri yine de çekilir (Mars'ın değer faktörü F/K-PD/DD kullanır).
+            if temelVeri == nil && !satir.endeksMi {
                 if let v = await TemelVeriServisi.shared.cek(sembol: satir.sembol) {
                     temelVeri = v
-                    saturnSonuc = Saturn().analiz(v)
+                    if !BistEvren.finansalMi(satir.sembol) {
+                        saturnSonuc = Saturn().analiz(v)
+                    }
                 }
             }
         }
@@ -228,7 +233,7 @@ struct DetayView: View {
             case .yil5:   return ("5y", "1wk", 1)
             }
         }()
-        if let s = try? await YahooBistServisi.cek(sembol: satir.sembol, aralik: r, interval: i) {
+        if let s = try? await VeriMerkezi.cek(sembol: satir.sembol, aralik: r, interval: i) {
             seriler[aralik] = grup > 1 ? Self.grupla(s.mumlar, grup) : s.mumlar
         }
         yukleniyorGrafik = false
@@ -277,9 +282,12 @@ struct DetayView: View {
     // MARK: - Nirengi bileşik skoru (Konsey)
 
     /// Mars (faktör) — fiyat + (varsa) temel veri. Senkron hesaplanır.
+    /// Finansallarda borç/özkaynak kalite bandına sokulmaz (bankada doğal olarak yüksek).
     private var marsSonuc: Mars.Sonuc? {
         guard !satir.endeksMi else { return nil }
-        return Mars().degerlendir(satir.mumlar, temel: temelVeri)
+        var t = temelVeri
+        if BistEvren.finansalMi(satir.sembol) { t?.borcOzkaynak = nil }
+        return Mars().degerlendir(satir.mumlar, temel: t)
     }
 
     /// Plüton (geri dönüş) — yalnızca fiyat. Senkron hesaplanır.
@@ -430,13 +438,22 @@ struct DetayView: View {
                     .frame(width: 42, height: 28)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Tema.skorRengi(d.skor)))
             } else {
-                Text(["Merkür", "Neptün", "Uranüs", "Satürn", "Jüpiter", "Venüs"].contains(ad) ? "—" : "Yakında")
+                Text(motorNotu(ad))
                     .font(.caption).foregroundColor(Tema.gri)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Capsule().fill(Tema.arkaplan))
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 14)
+    }
+
+    /// Skor üretmeyen motor satırının açıklaması (dürüst etiket: neden yok?).
+    private func motorNotu(_ ad: String) -> String {
+        if ad == "Satürn", !satir.endeksMi, BistEvren.finansalMi(satir.sembol) {
+            return "Kapalı · banka/sigorta"   // sanayi bantları finansal bilançoda yanıltıcı
+        }
+        if ad == "Ay" || ad == "Güneş" { return "Öğreniyor" }   // cihazda sicil biriktiriyor
+        return "—"
     }
 
     // MARK: - İstatistikler

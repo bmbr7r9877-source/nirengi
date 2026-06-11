@@ -66,6 +66,17 @@ public enum BistEvren {
         "MAVI":"XTCRT",
     ]
 
+    /// Bilanço yapısı sanayi şirketinden kökten farklı sektörler (banka/sigorta/leasing).
+    /// Satürn'ün bant eşikleri (borç/özkaynak, cari oran, marj bantları) bu şirketlerde
+    /// YANILTICI sonuç verir → BIST'te bu sektörlerde Satürn kapalı tutulur,
+    /// Mars'ın kalite faktöründe borç/özkaynak sayılmaz.
+    public static let finansalSektorler: Set<String> = ["XBANK", "XSGRT", "XFINK"]
+
+    public static func finansalMi(_ sembol: String) -> Bool {
+        guard let s = sektorHaritasi[sembol] else { return false }
+        return finansalSektorler.contains(s)
+    }
+
     /// sektorHaritasi'nda geçen benzersiz sektör endeksleri (robotun çekmesi gerekenler).
     public static var sektorEndeksleri: [String] {
         Array(Set(sektorHaritasi.values)).sorted()
