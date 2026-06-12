@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Çok-bacaklı, rejim-duyarlı bir teknik skor üretir (0-100):
 ///   • Trend     — SMA20/50/200 dizilimi + konum + MACD (+ opsiyonel endekse görelik)
-///   • Momentum  — RSI haritalama + hacim/likidite
+///   • Momentum  — RSI haritalama (likidite skora karışmaz; düşük hacim güveni kırpar)
 ///   • Volatilite — Bollinger sıkışması (squeeze) + ATR%
 /// Ağırlıklar ADX'e göre rejim-duyarlı kayar (trend piyasada trend/momentum,
 /// yatay piyasada volatilite öne çıkar). Güçlü dizilimde küçük sinerji bonusu.
@@ -29,6 +29,7 @@ public struct Merkur: Motor {
     public struct Sonuc: Sendable {
         public let skor: Double         // 0..100
         public let verdict: String
+        public let guven: Double        // 0..1
         public let bilesenler: Bilesenler
     }
 
@@ -36,19 +37,22 @@ public struct Merkur: Motor {
 
     public func degerlendir(_ mumlar: [Mum]) -> Katki? {
         degerlendir(mumlar, endeks: nil).map { s in
-            Katki(motor: isim, skor: s.skor, guven: guven(s), gerekce: s.bilesenler.aciklama)
+            Katki(motor: isim, skor: s.skor, guven: s.guven, gerekce: s.bilesenler.aciklama)
         }
     }
 
     /// Endeks (örn. XU100/SPY) mumları verilirse görelatif güç (RS) bacağı devreye girer.
-    public func degerlendir(_ mumlar: [Mum], endeks: [Mum]?) -> Sonuc? {
+    /// `likiditeEsigi`: günlük ortalama TL ciro bu değerin altındaysa "düşük hacim" sayılır.
+    /// Çağıran, evrene göre göreli eşik verebilir (örn. evren medyanının %5'i);
+    /// verilmezse mutlak 10M TL tabanı kullanılır.
+    public func degerlendir(_ mumlar: [Mum], endeks: [Mum]?, likiditeEsigi: Double? = nil) -> Sonuc? {
         let m = mumlar.sorted { $0.tarih < $1.tarih }
         guard m.count > 50 else { return nil }
         let kapanis = m.map(\.kapanis)
 
         let t = trendSkoru(m, kapanis: kapanis, endeks: endeks)
         let mom = momentumSkoru(m, kapanis: kapanis)
-        let vol = volatiliteSkoru(m, kapanis: kapanis)
+        let vol = volatiliteSkoru(m, kapanis: kapanis, trendSkor: t.skor)
 
         // Rejim-duyarlı ağırlıklar (ADX).
         let adx = Gostergeler.sonADX(m)
@@ -66,12 +70,19 @@ public struct Merkur: Motor {
         if t.guicluYukari { skor = min(100, skor * 1.05) }
         skor = max(0, min(100, skor))
 
+        // Likidite filtresi: son 20 günün ortalama TL hacmi cılızsa skor
+        // değişmez ama güven kırpılır ve açıklamaya uyarı düşülür.
+        let dusukLikidite = Merkur.ortalamaCiro(m) < (likiditeEsigi ?? 10_000_000)
+
         let bilesenler = Bilesenler(
             trend: t.skor, momentum: mom.skor, volatilite: vol.skor,
             rsi: mom.rsi, adx: adx,
             aciklama: "\(t.aciklama) · \(mom.aciklama) · \(vol.aciklama)"
+                + (dusukLikidite ? " · Düşük hacim" : "")
         )
-        return Sonuc(skor: skor, verdict: verdict(skor), bilesenler: bilesenler)
+        var g = guven(bilesenler)
+        if dusukLikidite { g = max(0.3, g - 0.2) }
+        return Sonuc(skor: skor, verdict: verdict(skor), guven: g, bilesenler: bilesenler)
     }
 
     // MARK: - Trend bacağı
@@ -159,16 +170,9 @@ public struct Merkur: Motor {
             else { rsiHam = r < 30 ? 8 : 5; rsiNot = r < 30 ? "RSI dip" : "RSI zayıf" }
         }
 
-        // Likidite bacağı (0..15) — ortalama dolar/lira hacmi
-        let dilim = m.suffix(20)
-        let ortHacim = dilim.map(\.hacim).reduce(0, +) / Double(max(1, dilim.count))
-        let degerHacim = ortHacim * (kapanis.last ?? 0)
-        var likHam = 1.0
-        if degerHacim > 1_000_000 {
-            likHam = 2 + 6 * min(1.0, max(0.0, (log10(degerHacim) - 6) / 2))
-        }
-
-        let skor100 = (rsiHam + likHam) / 30 * 100
+        // Momentum sadece fiyat gücü: RSI haritası (0..15 → 0..100).
+        // Likidite skora karışmaz; ayrı filtre olarak güveni etkiler.
+        let skor100 = rsiHam / 15 * 100
         return MomSonuc(skor: max(0, min(100, skor100)), aciklama: rsiNot, rsi: rsi)
     }
 
@@ -176,17 +180,42 @@ public struct Merkur: Motor {
 
     private struct VolSonuc { let skor: Double; let aciklama: String }
 
-    private func volatiliteSkoru(_ m: [Mum], kapanis: [Double]) -> VolSonuc {
-        guard kapanis.count >= 20, let s20 = Gostergeler.sonSMA(kapanis, 20), s20 > 0 else {
+    private func volatiliteSkoru(_ m: [Mum], kapanis: [Double], trendSkor: Double) -> VolSonuc {
+        guard kapanis.count >= 20 else {
             return VolSonuc(skor: 50, aciklama: "Volatilite nötr")
         }
-        let son20 = Array(kapanis.suffix(20))
-        let varyans = son20.map { pow($0 - s20, 2) }.reduce(0, +) / 20
-        let bbGenislik = (sqrt(varyans) * 2) / s20 * 100
-        let squeeze = bbGenislik < 2.0
 
+        // Bollinger bant genişliği serisi (son ~120 pencere).
+        func bantGenisligi(_ pencere: ArraySlice<Double>) -> Double? {
+            let ort = pencere.reduce(0, +) / Double(pencere.count)
+            guard ort > 0 else { return nil }
+            let varyans = pencere.map { pow($0 - ort, 2) }.reduce(0, +) / Double(pencere.count)
+            return (sqrt(varyans) * 2) / ort * 100
+        }
+        let pencereSayisi = min(120, kapanis.count - 19)
+        var genislikler: [Double] = []
+        for i in 0..<pencereSayisi {
+            let son = kapanis.count - i
+            if let g = bantGenisligi(kapanis[(son - 20)..<son]) { genislikler.append(g) }
+        }
+        guard let guncel = genislikler.first else {
+            return VolSonuc(skor: 50, aciklama: "Volatilite nötr")
+        }
+
+        // Sıkışma: kâğıdın kendi geçmişine göre. Yeterli geçmiş varsa en dar
+        // %10'luk dilim; kısa geçmişte sabit %2 eşiğine düş.
+        let squeeze: Bool
+        if genislikler.count >= 60 {
+            let esik = genislikler.sorted()[max(0, genislikler.count / 10 - 1)]
+            squeeze = guncel <= esik
+        } else {
+            squeeze = guncel < 2.0
+        }
+
+        // Sıkışma yön söylemez: trend yukarıyı işaret ediyorsa tam bonus,
+        // etmiyorsa kırılım aşağı da olabilir — küçük bonus.
         var skor = 50.0
-        if squeeze { skor += 30 }
+        if squeeze { skor += trendSkor >= 50 ? 30 : 8 }
         if let atr = Gostergeler.sonATR(m) {
             let atrYuzde = atr / (kapanis.last ?? 1) * 100
             if atrYuzde > 1.5 && atrYuzde < 4.0 { skor += 20 }
@@ -198,6 +227,14 @@ public struct Merkur: Motor {
 
     // MARK: - Yardımcılar
 
+    /// Son 20 günün ortalama TL cirosu (hacim × kapanış). Göreli likidite
+    /// eşiği kurmak isteyen çağıranlar için de açık.
+    public static func ortalamaCiro(_ mumlar: [Mum]) -> Double {
+        let dilim = mumlar.suffix(20)
+        guard !dilim.isEmpty else { return 0 }
+        return dilim.map { $0.hacim * $0.kapanis }.reduce(0, +) / Double(dilim.count)
+    }
+
     private func verdict(_ skor: Double) -> String {
         switch skor {
         case 85...100: return "A+ Fırsat (nadir)"
@@ -208,9 +245,8 @@ public struct Merkur: Motor {
         }
     }
 
-    private func guven(_ s: Sonuc) -> Double {
+    private func guven(_ b: Bilesenler) -> Double {
         // Bacaklar aynı yönde + ADX verisi varsa güven yüksek.
-        let b = s.bilesenler
         let yonler = [b.trend, b.momentum].map { $0 >= 50 }
         let uyum = yonler.allSatisfy { $0 } || yonler.allSatisfy { !$0 }
         var g = 0.6

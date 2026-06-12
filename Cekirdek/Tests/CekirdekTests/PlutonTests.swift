@@ -62,3 +62,48 @@ private func duzSeri(adet: Int = 150, baslangic: Double = 100) -> [Mum] {
     #expect(k.motor == "Plüton")
     #expect(k.guven >= 0.4 && k.guven <= 0.75)
 }
+
+// MARK: - BIST uyarlaması
+
+/// Dip serinin sonuna ardışık taban (−%9.5) barları ekler.
+private func tabanSerili(_ adetTaban: Int) -> [Mum] {
+    var m = dipSeri()
+    var fiyat = m.last!.kapanis
+    let bugun = Date()
+    for i in 0..<adetTaban {
+        fiyat *= 0.905
+        let t = Calendar.current.date(byAdding: .day, value: i + 1, to: bugun)!
+        m.append(Mum(tarih: t, acilis: fiyat / 0.905, yuksek: fiyat / 0.905,
+                     dusuk: fiyat, kapanis: fiyat, hacim: 500_000))
+    }
+    return m
+}
+
+@Test func plutonTabanSerisindeSusar() {
+    // ≥2 ardışık taban barı: fiyat keşfi yok, motor nil dönmeli.
+    #expect(Pluton().degerlendir(tabanSerili(2)) == nil)
+    #expect(Pluton().degerlendir(tabanSerili(3)) == nil)
+}
+
+@Test func plutonTekTabanBarindaTemkinli() throws {
+    // Tek taban barında susmaz ama dip teyidi vermez + ceza yer:
+    // skor, taban barı olmayan aynı serinin skorunun altında kalmalı.
+    let tabanli = Pluton().degerlendir(tabanSerili(1))
+    let normal = try #require(Pluton().degerlendir(dipSeri()))
+    if let t = tabanli { #expect(t.skor < normal.skor) }
+}
+
+@Test func plutonLimitsizPiyasadaTabanSerisiYok() throws {
+    // Serbest profilde (limit yok) aynı seri limit rejimi sayılmaz, motor konuşur.
+    let s = Pluton(profil: .serbest).degerlendir(tabanSerili(2))
+    #expect(s != nil)
+}
+
+@Test func plutonAgirTedbirSkoruNotraleCeker() throws {
+    let temiz = try #require(Pluton().katki(dipSeri()))
+    let tedbir = Tedbir(sembol: "TEST", tur: .tekFiyat, ad: "Tek Fiyat",
+                        baslangic: nil, bitis: nil)
+    let tedbirli = try #require(Pluton().katki(dipSeri(), tedbirler: [tedbir]))
+    #expect(tedbirli.guven < temiz.guven)
+    #expect(abs(tedbirli.skor - 50) <= abs(temiz.skor - 50))
+}

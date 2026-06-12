@@ -10,11 +10,15 @@ let package = Package(
         .library(name: "Cekirdek", targets: ["Cekirdek"]),
         .executable(name: "demo", targets: ["demo"]),
         .executable(name: "ogrenme", targets: ["ogrenme"]),
+        .executable(name: "kiyas", targets: ["kiyas"]),
+        .executable(name: "backtest", targets: ["backtest"]),
     ],
     targets: [
         .target(name: "Cekirdek"),
         .executableTarget(name: "demo", dependencies: ["Cekirdek"]),
         .executableTarget(name: "ogrenme", dependencies: ["Cekirdek"]),
+        .executableTarget(name: "kiyas", dependencies: ["Cekirdek"]),
+        .executableTarget(name: "backtest", dependencies: ["Cekirdek"]),
         .testTarget(name: "CekirdekTests", dependencies: ["Cekirdek"]),
     ]
 )

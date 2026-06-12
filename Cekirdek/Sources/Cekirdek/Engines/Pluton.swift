@@ -10,15 +10,29 @@ import Foundation
 ///
 /// Kanal güvenilirliği R² ile ölçülür; zayıf kanalda skor YÖNE devrilmez, NÖTRALE
 /// çekilir (Argus'un whiplash düzeltmesi): skor = 50 + (skor−50)·çarpan.
+///
+/// BIST uyarlaması (PiyasaProfili üzerinden, mutlak eşik gömülmez):
+///   • Taban serisi (≥2 ardışık limit-aşağı bar): fiyat keşfi yok, kuyrukta satış
+///     birikmiş — "dip" yanılsamadır, motor susar (nil). Tek taban barında dip
+///     teyidi sayılmaz ve ceza uygulanır (mıknatıs etkisi: limit devamı olasıdır).
+///   • Hacim teyidi medyan bazlı ve limit barında geçersiz (tavan/taban hacmi yapay).
+///   • Volatilite cezası görelidir: kısa vadeli vol kendi uzun vadeli rejiminin
+///     üstüne çıktıysa ceza (sabit % eşik yok — her piyasada çalışır).
+///   • Maliyet bilinci: orta banda dönüş potansiyeli gidiş-dönüş maliyeti
+///     karşılamıyorsa skor nötrale çekilir.
+///   • VBTS tedbiri: güven tedbir çarpanıyla kırpılır; ağır kademede (brüt takas,
+///     tek fiyat) skor da nötrale çekilir.
 public struct Pluton {
     public let isim = "Plüton"
 
     public let geriBakis: Int
     public let regresyonK: Double
+    public let profil: PiyasaProfili
 
-    public init(geriBakis: Int = 120, regresyonK: Double = 2.0) {
+    public init(geriBakis: Int = 120, regresyonK: Double = 2.0, profil: PiyasaProfili = .bist) {
         self.geriBakis = geriBakis
         self.regresyonK = regresyonK
+        self.profil = profil
     }
 
     public struct Sonuc: Sendable {
@@ -41,6 +55,13 @@ public struct Pluton {
         let N = min(geriBakis, m.count)
         let dilim = Array(m.suffix(N))
         let kapanis = dilim.map(\.kapanis)
+
+        // Limit rejimi: ≥2 ardışık taban barında "geri dönüş" okunamaz — kuyrukta
+        // eşleşmemiş satış var, gözüken dip gerçek talep dengesi değil. Motor susar.
+        let tabanSeri = limitSerisi(kapanis, yon: -1)
+        if tabanSeri >= 2 { return nil }
+        let sonBarTaban = tabanSeri == 1
+        let sonBarTavan = limitSerisi(kapanis, yon: 1) >= 1
 
         let (egim, kesisim, sigma, orta, ust, alt) = kanal(kapanis, k: regresyonK)
         guard let son = dilim.last else { return nil }
@@ -70,8 +91,9 @@ public struct Pluton {
         default:          return nil   // R² < 0.05: kanal yok hükmünde
         }
 
-        // Tetikleyiciler.
-        let altTema = son.dusuk <= alt + 0.10 * tampon
+        // Tetikleyiciler. Taban barındaki "alt bant teması" sayılmaz:
+        // limitli düşüşte gün içi dip yapay olarak kesilmiştir.
+        let altTema = son.dusuk <= alt + 0.10 * tampon && !sonBarTaban
         let rsiDizi = rsiDizisi(dilim, periyot: 14)
         let rsiSon = rsiDizi.last ?? 50
         let rsiOnce = rsiDizi.dropLast().last ?? 50
@@ -92,28 +114,90 @@ public struct Pluton {
         // Kanal güvenilirliği: nötrale çek (yöne devirme).
         skor = 50 + (skor - 50) * carpan
 
-        // Hacim teyidi.
-        let ortHacim = dilim.suffix(21).prefix(20).map(\.hacim).reduce(0, +) / 20.0
-        if ortHacim > 0 && son.hacim > 1.5 * ortHacim { skor += 10 }
+        // Hacim teyidi: medyan bazlı (tavan/taban barları ortalamayı çarpıtır)
+        // ve limit barında geçersiz — limit hacmi gerçek alıcı iştahı değildir.
+        let hacimler = dilim.suffix(21).dropLast().map(\.hacim).sorted()
+        if !hacimler.isEmpty, !sonBarTaban, !sonBarTavan {
+            let medyanHacim = hacimler[hacimler.count / 2]
+            if medyanHacim > 0 && son.hacim > 1.5 * medyanHacim { skor += 10 }
+        }
 
         // Cezalar.
         if egim < -(orta * 0.0005) { skor -= 20 }
-        if orta > 0 && sigma / orta > 0.08 { skor -= 10 }
+        // Volatilite rejimi (göreli): son 20 barın oynaklığı kendi uzun vadeli
+        // rejiminin belirgin üstündeyse geri dönüş zamanlaması güvenilmez.
+        if volRejimOrani(kapanis) > 1.6 { skor -= 10 }
         if rsiSon > 50 { skor -= 15 }
+        // Taban barı: dip teyidi yok + mıknatıs etkisi (limit devamı olası).
+        if sonBarTaban { skor -= 15 }
+
+        // Maliyet bilinci: orta banda dönüş bile gidiş-dönüş maliyetini
+        // karşılamıyorsa sinyalin pratikte değeri yok — nötrale çek.
+        let potansiyelYuzde = son.kapanis > 0 ? (t1 - son.kapanis) / son.kapanis * 100 : 0
+        let maliyetsiz = potansiyelYuzde < 2 * profil.islemMaliyetiYuzde
+        if maliyetsiz { skor = 50 + (skor - 50) * 0.5 }
 
         skor = min(max(skor, 0), 100)
 
-        let aciklama = gerekce(skor: skor, tema: altTema, rsi: rsiDonus, uyum: uyumsuzluk, egim: egim)
+        var aciklama = gerekce(skor: skor, tema: altTema, rsi: rsiDonus, uyum: uyumsuzluk, egim: egim)
+        if sonBarTaban { aciklama += " Taban barı: dip teyidi yok, limit devamı riski." }
+        if maliyetsiz { aciklama += " Dönüş potansiyeli işlem maliyetini karşılamıyor." }
         return Sonuc(skor: skor, altBant: alt, ortaBant: orta, ustBant: ust,
                      girisAlt: girisAlt, girisUst: girisUst, gecersizSeviye: gecersiz,
                      hedefler: [t1, t2], rKare: rKare, aciklama: aciklama)
     }
 
     /// Konsey katkısı (güven: R² ölçeklendirir, 0.4..0.75).
-    public func katki(_ mumlar: [Mum]) -> Katki? {
+    /// VBTS tedbiri varsa güven tedbir çarpanıyla kırpılır; ağır kademede
+    /// (brüt takas, tek fiyat) fiyat keşfi bozuk olduğundan skor da nötrale çekilir.
+    public func katki(_ mumlar: [Mum], tedbirler: [Tedbir] = []) -> Katki? {
         guard let s = degerlendir(mumlar) else { return nil }
-        let guven = min(0.75, 0.4 + s.rKare * 0.5)
-        return Katki(motor: isim, skor: s.skor, guven: guven, gerekce: s.aciklama)
+        let tedbirCarpani = TedbirListesi.guvenCarpani(tedbirler)
+        let guven = min(0.75, 0.4 + s.rKare * 0.5) * tedbirCarpani
+        var skor = s.skor
+        var gerekce = s.aciklama
+        if tedbirCarpani <= 0.7 {
+            skor = 50 + (skor - 50) * tedbirCarpani
+            gerekce += " Ağır VBTS tedbiri: fiyat keşfi kısıtlı."
+        }
+        return Katki(motor: isim, skor: skor, guven: guven, gerekce: gerekce)
+    }
+
+    // MARK: - BIST'e özgü rejim tespitleri
+
+    /// Son bardan geriye ardışık limit-hareketi sayısı (yön: +1 tavan, −1 taban).
+    /// Limit hareketi: günlük değişim, profil limitinin `limitYakinlikOrani`
+    /// katına ulaşmış bar. Limitsiz piyasada hep 0.
+    private func limitSerisi(_ kapanis: [Double], yon: Double) -> Int {
+        guard let limit = profil.gunlukLimitYuzde, kapanis.count >= 2 else { return 0 }
+        let esik = limit * profil.limitYakinlikOrani
+        var seri = 0
+        var i = kapanis.count - 1
+        while i >= 1, kapanis[i - 1] > 0 {
+            let degisim = (kapanis[i] - kapanis[i - 1]) / kapanis[i - 1] * 100
+            if degisim * yon >= esik { seri += 1; i -= 1 } else { break }
+        }
+        return seri
+    }
+
+    /// Kısa vadeli (20 bar) getiri oynaklığının uzun vadeli rejime oranı.
+    /// >1 = oynaklık kendi normalinin üstünde. Mutlak eşik içermez.
+    private func volRejimOrani(_ kapanis: [Double]) -> Double {
+        func std(_ d: ArraySlice<Double>) -> Double {
+            var getiriler: [Double] = []
+            var onceki: Double?
+            for f in d {
+                if let o = onceki, o > 0 { getiriler.append((f - o) / o) }
+                onceki = f
+            }
+            guard getiriler.count >= 2 else { return 0 }
+            let ort = getiriler.reduce(0, +) / Double(getiriler.count)
+            return (getiriler.reduce(0) { $0 + ($1 - ort) * ($1 - ort) } / Double(getiriler.count - 1)).squareRoot()
+        }
+        let uzun = std(kapanis[...])
+        let kisa = std(kapanis.suffix(21))
+        guard uzun > 0 else { return 1 }
+        return kisa / uzun
     }
 
     // MARK: - Matematik

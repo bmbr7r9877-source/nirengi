@@ -50,7 +50,9 @@ public struct Konsey: Sendable {
 
     /// Nirengi varsayılan motor ağırlıkları (Terazi/öğrenme gelene kadar sabit).
     public static let varsayilanAgirliklar: [String: Double] = [
-        "Merkür": 0.30, "Satürn": 0.20, "Neptün": 0.15,
+        // Neptün 0.15→0.08 (2026-06 kıyas: 2y BIST30'da yön isabeti <%50 —
+        // edge kanıtlanana dek düşük; Ay öğrenmesi sicil birikince düzeltir).
+        "Merkür": 0.30, "Satürn": 0.20, "Neptün": 0.08,
         "Jüpiter": 0.13, "Uranüs": 0.12, "Venüs": 0.10,
         "Mars": 0.10, "Plüton": 0.08,
     ]

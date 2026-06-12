@@ -42,7 +42,7 @@ private func mumlar(egim: Double, adet: Int = 220, baslangic: Double = 100, guru
 }
 
 @Test func dusenTrendDusukSkor() throws {
-    let s = try #require(Merkur().degerlendir(mumlar(egim: -1.2), endeks: nil))
+    let s = try #require(Merkur().degerlendir(mumlar(egim: -1.2, gurultu: 1.0), endeks: nil))
     #expect(s.skor < 45, "Düşüş skoru 45 altı olmalı, geldi: \(s.skor) [\(s.verdict)]")
 }
 

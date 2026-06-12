@@ -51,6 +51,33 @@ public enum Karar: String, Sendable {
     }
 }
 
+/// Piyasaya özgü yapısal parametreler. Motorlar mutlak eşik gömmek yerine
+/// buradan okur; yeni piyasa = yeni profil, kod değişmez.
+public struct PiyasaProfili: Sendable {
+    /// Günlük fiyat değişim limiti (% — yoksa nil). BIST: ±10 (VWAP bazlı tavan/taban).
+    public let gunlukLimitYuzde: Double?
+    /// Gidiş-dönüş işlem maliyeti (%). BIST: ~%0.2/yön komisyon + kayma ≈ %0.5.
+    public let islemMaliyetiYuzde: Double
+    /// Bir barın "limit hareketi" sayılması için limitin ne kadarına ulaşması gerekir (0..1).
+    public let limitYakinlikOrani: Double
+    /// Sat sinyali için ek kanıt çarpanı (≥1). Yüksek enflasyonlu piyasada nominal
+    /// fiyatlar yukarı sürüklenir; aşağı tahmin daha kolay yanılır.
+    public let satEdgeCarpani: Double
+
+    public init(gunlukLimitYuzde: Double?, islemMaliyetiYuzde: Double,
+                limitYakinlikOrani: Double = 0.9, satEdgeCarpani: Double = 1.0) {
+        self.gunlukLimitYuzde = gunlukLimitYuzde
+        self.islemMaliyetiYuzde = islemMaliyetiYuzde
+        self.limitYakinlikOrani = limitYakinlikOrani
+        self.satEdgeCarpani = satEdgeCarpani
+    }
+
+    public static let bist = PiyasaProfili(gunlukLimitYuzde: 10, islemMaliyetiYuzde: 0.5,
+                                           limitYakinlikOrani: 0.9, satEdgeCarpani: 1.3)
+    /// Limitsiz piyasalar (ABD hissesi, kripto) için makul varsayılan.
+    public static let serbest = PiyasaProfili(gunlukLimitYuzde: nil, islemMaliyetiYuzde: 0.2)
+}
+
 /// Her motorun uyduğu sözleşme: mum dizisi → katkı (yoksa nil).
 public protocol Motor: Sendable {
     var isim: String { get }

@@ -8,7 +8,7 @@ struct HisseSatiri: Identifiable {
     let ad: String
     let fiyat: Double
     let gunlukDegisim: Double      // %
-    let sonuc: Merkur.Sonuc
+    var sonuc: Merkur.Sonuc
     let mumlar: [Mum]
     var zaman: Date = Date()       // verinin zaman damgası (Yahoo regularMarketTime)
     var endeksMi: Bool = false     // endeks ise fiyat ₺ değil puan

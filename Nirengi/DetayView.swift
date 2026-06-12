@@ -68,8 +68,9 @@ struct DetayView: View {
             // Neptün'ü arka planda hesapla (ana akışı bloklamadan).
             if neptunTahmin == nil {
                 let mumlar = satir.mumlar
+                let baglam = model.neptunBaglami()
                 neptunTahmin = await Task.detached(priority: .userInitiated) {
-                    Neptun().tahminEt(mumlar)
+                    Neptun().tahminEt(mumlar, baglam: baglam)
                 }.value
             }
         }
@@ -299,7 +300,7 @@ struct DetayView: View {
     /// Mevcut motor sonuçlarından Konsey katkı listesi.
     private var katkilar: [Katki] {
         var arr: [Katki] = [
-            Katki(motor: "Merkür", skor: satir.sonuc.skor, guven: 0.8, gerekce: satir.sonuc.verdict)
+            Katki(motor: "Merkür", skor: satir.sonuc.skor, guven: satir.sonuc.guven, gerekce: satir.sonuc.verdict)
         ]
         if let t = neptunTahmin {
             arr.append(Katki(motor: "Neptün", skor: max(0, min(100, 50 + t.degisimYuzde * 5)),
@@ -375,6 +376,10 @@ struct DetayView: View {
                 RoundedRectangle(cornerRadius: 2).fill(Tema.turuncu).frame(width: 4, height: 18)
                 Text("Motorlar").font(.system(size: 20, weight: .bold)).foregroundColor(Tema.metin)
                 Spacer()
+                if let zaman = model.sonGuncelleme {
+                    Text("Güncelleme: \(zaman.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundColor(Tema.metinIkincil)
+                }
             }
             VStack(spacing: 0) {
                 ForEach(Array(motorTanim.enumerated()), id: \.offset) { idx, m in

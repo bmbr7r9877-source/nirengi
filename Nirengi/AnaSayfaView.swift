@@ -54,7 +54,7 @@ struct AnaSayfaView: View {
         let liste = model.hisseler.filter { set.contains($0.sembol) }
         switch siralama {
         case .sembol:  return liste.sorted { $0.sembol < $1.sembol }
-        case .skor:    return liste.sorted { $0.sonuc.skor > $1.sonuc.skor }
+        case .skor:    return liste.sorted { model.birlesikSkor($0) > model.birlesikSkor($1) }
         case .fiyat:   return liste.sorted { $0.fiyat > $1.fiyat }
         case .degisim: return liste.sorted { $0.degisim(gunOnce: aralik.gun) > $1.degisim(gunOnce: aralik.gun) }
         }
@@ -93,6 +93,7 @@ struct AnaSayfaView: View {
                 }
                 .padding(.bottom, 12)
             }
+            .refreshable { await model.yenileAsync() }
             .overlay {
                 if model.yukleniyor && model.hisseler.isEmpty {
                     VStack(spacing: 12) {
@@ -195,7 +196,27 @@ struct AnaSayfaView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("Skor").frame(width: 46)
+            // "Skor" — seçmeli motor birleşimi (çoklu seçim)
+            Menu {
+                ForEach(PiyasaModel.listeMotorlari, id: \.self) { m in
+                    Button {
+                        if model.skorSecimi.contains(m) {
+                            if model.skorSecimi.count > 1 { model.skorSecimi.remove(m) }
+                        } else {
+                            model.skorSecimi.insert(m)
+                        }
+                    } label: {
+                        if model.skorSecimi.contains(m) { Label(m, systemImage: "checkmark") }
+                        else { Text(m) }
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Skor")
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundColor(Tema.turuncu)
+                }
+            }
+            .frame(width: 56)
             // "Son" yerine seçmeli kolon (Fiyat / İşlem Hacmi)
             Menu {
                 ForEach(SonKolon.allCases) { k in
@@ -232,8 +253,8 @@ struct AnaSayfaView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            skorRozet(satir.sonuc.skor)
-                .frame(width: 46)
+            skorRozet(model.birlesikSkor(satir))
+                .frame(width: 56)
 
             Text(sonKolonDeger(satir))
                 .font(.system(size: 16, weight: .semibold)).foregroundColor(Tema.metin)
