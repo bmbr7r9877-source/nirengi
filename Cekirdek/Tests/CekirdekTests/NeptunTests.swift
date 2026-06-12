@@ -39,6 +39,23 @@ private func mumlar(egim: Double, adet: Int = 250, baslangic: Double = 100, guru
     #expect(sonuc.katkilar.count == 2)
 }
 
+// MARK: - Risk bekçisi
+
+@Test func riskDegerlendirSinirlarIcinde() throws {
+    let r = try #require(Neptun().riskDegerlendir(mumlar(egim: 0.2)))
+    #expect(r.skor >= 0 && r.skor <= 100)
+    #expect(r.frenCarpani >= 0.55 && r.frenCarpani <= 1.0)
+    #expect(r.kotuSenaryoYuzde < r.tahmin.degisimYuzde)   // kötü senaryo tahminden aşağıda
+}
+
+@Test func frenKonseySkorunuNotreCeker() {
+    let katkilar = [Katki(motor: "Merkür", skor: 80, guven: 0.8, gerekce: "test")]
+    let serbest = Konsey.harmanla(katkilar).skor
+    let frenli = Konsey.harmanla(katkilar, fren: 0.6).skor
+    #expect(abs(frenli - 50) < abs(serbest - 50))
+    #expect((frenli - 50) * (serbest - 50) > 0)           // yön korunur, iddia kısılır
+}
+
 // MARK: - BIST profili
 
 private func tavanSerisiMumlar(tavanGun: Int = 4) -> [Mum] {

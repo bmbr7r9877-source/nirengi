@@ -15,7 +15,7 @@ struct DetayView: View {
     @State private var usdKur: [(gun: Date, kur: Double)] = []
     @State private var cizilen: [Mum] = []                    // ekranda çizilen (TL veya USD) — bir kez hesaplanır
     @State private var yukleniyorGrafik = false
-    @State private var neptunTahmin: Neptun.Tahmin?           // Neptün sonucu (arka planda hesaplanır)
+    @State private var neptunRisk: Neptun.Risk?               // Neptün risk bekçisi (arka planda hesaplanır)
     @State private var saturnSonuc: Saturn.Sonuc?             // Satürn (temel) — arka planda çekilir
     @State private var temelVeri: TemelVeri?                  // Mars faktörleri için ham temel veri
     @State private var etkinAgirliklar = Konsey.varsayilanAgirliklar  // Ay (öğrenilmiş) ile düzeltilebilir
@@ -66,11 +66,11 @@ struct DetayView: View {
         .task { if usdKur.isEmpty { usdKur = await DovizServisi.shared.usdtry(); if usd { guncelleCizilen() } } }
         .task {
             // Neptün'ü arka planda hesapla (ana akışı bloklamadan).
-            if neptunTahmin == nil {
+            if neptunRisk == nil {
                 let mumlar = satir.mumlar
                 let baglam = model.neptunBaglami()
-                neptunTahmin = await Task.detached(priority: .userInitiated) {
-                    Neptun().tahminEt(mumlar, baglam: baglam)
+                neptunRisk = await Task.detached(priority: .userInitiated) {
+                    Neptun().riskDegerlendir(mumlar, baglam: baglam)
                 }.value
             }
         }
@@ -302,10 +302,6 @@ struct DetayView: View {
         var arr: [Katki] = [
             Katki(motor: "Merkür", skor: satir.sonuc.skor, guven: satir.sonuc.guven, gerekce: satir.sonuc.verdict)
         ]
-        if let t = neptunTahmin {
-            arr.append(Katki(motor: "Neptün", skor: max(0, min(100, 50 + t.degisimYuzde * 5)),
-                             guven: t.guven / 100, gerekce: t.oneri.rawValue))
-        }
         if !satir.endeksMi, let u = model.uranusSonucu(satir) {
             arr.append(Katki(motor: "Uranüs", skor: u.skor, guven: 0.7, gerekce: u.aciklama))
         }
@@ -328,8 +324,11 @@ struct DetayView: View {
     }
 
     private var nirengiSkoru: some View {
-        // Ay: öğrenilmiş ağırlıklarla harmanla. Güneş: skoru geçmiş isabete göre kalibre et.
-        let b = Konsey.harmanla(katkilar, agirliklar: etkinAgirliklar)
+        // Ay: öğrenilmiş ağırlıklarla harmanla. Neptün: risk freni (skoru nötre çeker).
+        // Güneş: skoru geçmiş isabete göre kalibre et.
+        let fren = (neptunRisk?.frenCarpani ?? 1.0)
+            * TedbirListesi.guvenCarpani(model.tedbirler[satir.sembol] ?? [])
+        let b = Konsey.harmanla(katkilar, agirliklar: etkinAgirliklar, fren: fren)
         let skor = kalibrasyon.map { Gunes.uygula(b.skor, $0) } ?? b.skor
         let karar = Karar.skordan(skor)
         return HStack(spacing: 16) {
@@ -343,6 +342,10 @@ struct DetayView: View {
                     .font(.system(size: 22, weight: .bold)).foregroundColor(.white)
                 Text("\(katkilar.count) motordan")
                     .font(.caption).foregroundColor(.white.opacity(0.7))
+                if let r = neptunRisk, r.seviye != .dusuk {
+                    Text("Neptün freni: \(r.seviye.rawValue.lowercased()) risk")
+                        .font(.caption).foregroundColor(Tema.turuncu)
+                }
             }
             Spacer()
         }
@@ -359,7 +362,7 @@ struct DetayView: View {
     /// Gezegen motorları (Merkür aktif; diğerleri eklendikçe dolacak).
     private let motorTanim: [(ad: String, rol: String)] = [
         ("Merkür", "Teknik analiz"),
-        ("Neptün", "Fiyat tahmini"),
+        ("Neptün", "Risk bekçisi"),
         ("Jüpiter", "Makro rejim"),
         ("Satürn", "Temel & kalite"),
         ("Venüs", "Haber & duygu"),
@@ -400,9 +403,10 @@ struct DetayView: View {
         case "Merkür":
             return (satir.sonuc.skor, satir.sonuc.verdict)
         case "Neptün":
-            guard let t = neptunTahmin else { return nil }
-            let skor = max(0, min(100, 50 + t.degisimYuzde * 5))
-            return (skor, String(format: "%@ · %%%.1f tahmin", t.oneri.rawValue, t.degisimYuzde))
+            guard let r = neptunRisk else { return nil }
+            // Renk: güvenli=yeşil olacak şekilde risk tersine çevrilir (100-risk).
+            return (100 - r.skor, String(format: "%@ risk · kötü senaryo %%%.1f",
+                                         r.seviye.rawValue, r.kotuSenaryoYuzde))
         case "Uranüs":
             guard !satir.endeksMi, let u = model.uranusSonucu(satir) else { return nil }
             return (u.skor, u.aciklama)

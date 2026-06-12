@@ -20,6 +20,14 @@ func yukle(_ url: URL) -> [Mum]? {
     }
 }
 
+/// `son` indeksinde biten `adet` mumun ortalama hacmi.
+func gecmisHacim(_ m: [Mum], son: Int, adet: Int) -> Double {
+    let bas = max(0, son - adet + 1)
+    guard bas <= son else { return 0 }
+    let dilim = m[bas...son]
+    return dilim.map(\.hacim).reduce(0, +) / Double(dilim.count)
+}
+
 let klasor = URL(fileURLWithPath: "/tmp/bist_tarihsel")
 let dosyalar = (try? FileManager.default.contentsOfDirectory(at: klasor, includingPropertiesForKeys: nil)) ?? []
 guard let xu100 = yukle(klasor.appendingPathComponent("XU100.json")) else {
@@ -36,6 +44,8 @@ struct Gozlem {
     let momentum: Double
     let volatilite: Double
     let adx: Double?
+    let hacimOrani: Double      // son 10 gün ort. hacim / önceki 50 gün ort. hacim
+    let yukselisHacimPayi: Double // son 20 günde hacmin yükseliş günlerine düşen payı
     let getiri: Double      // hissenin 10 işlem günü sonraki % getirisi
     let endeksGetiri: Double
     var fark: Double { getiri - endeksGetiri }
@@ -60,6 +70,17 @@ for dosya in dosyalar where dosya.lastPathComponent != "XU100.json" {
               xuIdx + ufuk < xu100.count else { i += adim; continue }
         let gecmis = Array(mumlar[0...i])
         let endeksGecmis = Array(xu100[0...xuIdx])
+        // Hacim özellikleri (sinyal anına kadarki veriden).
+        let son10 = gecmisHacim(mumlar, son: i, adet: 10)
+        let onceki50 = gecmisHacim(mumlar, son: i - 10, adet: 50)
+        let hacimOrani = onceki50 > 0 ? son10 / onceki50 : 1
+        var yukselisHacim = 0.0, toplamHacim = 0.0
+        for j in max(1, i - 19)...i {
+            toplamHacim += mumlar[j].hacim
+            if mumlar[j].kapanis > mumlar[j - 1].kapanis { yukselisHacim += mumlar[j].hacim }
+        }
+        let yukselisPayi = toplamHacim > 0 ? yukselisHacim / toplamHacim : 0.5
+
         if let s = merkur.degerlendir(gecmis, endeks: endeksGecmis) {
             let f0 = mumlar[i].kapanis
             let f1 = mumlar[i + ufuk].kapanis
@@ -71,6 +92,8 @@ for dosya in dosyalar where dosya.lastPathComponent != "XU100.json" {
                                         momentum: s.bilesenler.momentum,
                                         volatilite: s.bilesenler.volatilite,
                                         adx: s.bilesenler.adx,
+                                        hacimOrani: hacimOrani,
+                                        yukselisHacimPayi: yukselisPayi,
                                         getiri: (f1 - f0) / f0 * 100,
                                         endeksGetiri: (e1 - e0) / e0 * 100))
             }
@@ -129,11 +152,12 @@ yonluKazanc(" güven =0.70 ", yonlu.filter { $0.guven >= 0.70 && $0.guven < 0.70
 yonluKazanc(" güven 0.70+ ", yonlu.filter { $0.guven >= 0.705 })
 
 // Ham gözlemleri analize dök: güven formülü adayları bu CSV üzerinde sınanır.
-var csv = "tarih,skor,guven,trend,momentum,volatilite,adx,getiri,fark\n"
+var csv = "tarih,skor,guven,trend,momentum,volatilite,adx,hacimorani,yukselispayi,getiri,fark\n"
 for g in gozlemler {
     let adxStr = g.adx.map { String(format: "%.2f", $0) } ?? ""
-    csv += String(format: "%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%@,%.3f,%.3f\n",
-                  g.tarih.timeIntervalSince1970, g.skor, g.guven, g.trend, g.momentum, g.volatilite, adxStr, g.getiri, g.fark)
+    csv += String(format: "%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%@,%.3f,%.3f,%.3f,%.3f\n",
+                  g.tarih.timeIntervalSince1970, g.skor, g.guven, g.trend, g.momentum, g.volatilite, adxStr,
+                  g.hacimOrani, g.yukselisHacimPayi, g.getiri, g.fark)
 }
 try? csv.write(toFile: "/tmp/merkur_gozlem.csv", atomically: true, encoding: .utf8)
 print("\nCSV: /tmp/merkur_gozlem.csv")

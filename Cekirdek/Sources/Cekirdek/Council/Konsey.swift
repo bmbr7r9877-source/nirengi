@@ -36,7 +36,10 @@ public struct Konsey: Sendable {
 
     /// Hazır katkı listesini (farklı veri ihtiyaçlı motorlardan toplanmış) harmanlar.
     /// Her katkı `guven × ağırlık` ile tartılır. Tek "Nirengi skoru" + karar üretir.
-    public static func harmanla(_ katkilar: [Katki], agirliklar: [String: Double] = [:]) -> Sonuc {
+    /// `fren` (Neptün risk bekçisi, 0.55...1): skoru nötre çeker — risk yüksekken
+    /// Konsey'in iddiası kısılır, yönü değişmez.
+    public static func harmanla(_ katkilar: [Katki], agirliklar: [String: Double] = [:],
+                                fren: Double = 1.0) -> Sonuc {
         guard !katkilar.isEmpty else { return Sonuc(skor: 50, karar: .yetersizVeri, katkilar: []) }
         var toplamAgirlik = 0.0, toplamSkor = 0.0
         for k in katkilar {
@@ -44,15 +47,16 @@ public struct Konsey: Sendable {
             toplamSkor += k.skor * w
             toplamAgirlik += w
         }
-        let skor = toplamAgirlik > 0 ? toplamSkor / toplamAgirlik : 50
+        var skor = toplamAgirlik > 0 ? toplamSkor / toplamAgirlik : 50
+        skor = 50 + (skor - 50) * min(1, max(0, fren))
         return Sonuc(skor: skor, karar: .skordan(skor), katkilar: katkilar)
     }
 
     /// Nirengi varsayılan motor ağırlıkları (Terazi/öğrenme gelene kadar sabit).
+    /// Neptün yok: 2026-06 kıyasında yön isabeti <%50 çıktı — yön oyu vermez,
+    /// `harmanla(fren:)` üzerinden risk bekçisi olarak çalışır.
     public static let varsayilanAgirliklar: [String: Double] = [
-        // Neptün 0.15→0.08 (2026-06 kıyas: 2y BIST30'da yön isabeti <%50 —
-        // edge kanıtlanana dek düşük; Ay öğrenmesi sicil birikince düzeltir).
-        "Merkür": 0.30, "Satürn": 0.20, "Neptün": 0.08,
+        "Merkür": 0.30, "Satürn": 0.20,
         "Jüpiter": 0.13, "Uranüs": 0.12, "Venüs": 0.10,
         "Mars": 0.10, "Plüton": 0.08,
     ]

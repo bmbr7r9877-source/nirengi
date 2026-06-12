@@ -36,6 +36,67 @@ public struct Neptun: Motor {
         public let gerekce: String
     }
 
+    // MARK: - Risk bekçisi
+    //
+    // 2026-06 kıyası (BIST30×2y, n=1044): Neptün yön edge'i üretemiyor (<%50) ama
+    // bantları isabetli (%91 kapsama) ve geniş bant mayınlı bölgeyi ayırıyor
+    // (geniş tertil: ort −0.52 / en kötü −48 vs dar: +0.32 / −15). Merkür Al
+    // sinyallerini bu frenle süzmek en kötü işlemi −48→−15'e indirdi.
+    // Bu yüzden Neptün'ün asıl görevi yön oyu değil RİSK FRENİ.
+
+    public enum RiskSeviyesi: String, Sendable { case dusuk = "Düşük", orta = "Orta", yuksek = "Yüksek" }
+
+    public struct Risk: Sendable {
+        public let skor: Double             // 0-100, yüksek = mayınlı
+        public let seviye: RiskSeviyesi
+        public let frenCarpani: Double      // Konsey skorunu nötre çeken çarpan (0.55...1)
+        public let kotuSenaryoYuzde: Double // alt bant: ufuk sonunda beklenen en kötü %
+        public let ufukGun: Int
+        public let gerekce: String
+        public let tahmin: Tahmin           // bant/teşhis detayları (UI grafiği için)
+    }
+
+    /// Risk değerlendirmesi. Bileşenler hep göreli (kâğıdın kendi geçmişine göre):
+    /// 1) model belirsizliği — bandın günlük eşdeğeri, kâğıdın olağan oynaklığının kaç katı;
+    /// 2) oynaklık rejimi — kısa vol kendi uzun voluna göre şişmiş mi;
+    /// 3) likidite — ölü bar oranı + hacim kuruması.
+    /// Limit serisi/kur şoku bayrakları VETO DEĞİL (kıyas: bayraklılar ort +0.91 getirdi) —
+    /// güven/bant üzerinden zaten işliyor, burada sadece gerekçe notu.
+    public func riskDegerlendir(_ mumlar: [Mum], baglam: Baglam? = nil) -> Risk? {
+        guard let t = tahminEt(mumlar, baglam: baglam) else { return nil }
+        let sirali = mumlar.sorted { $0.tarih < $1.tarih }
+        let fiyatlar = Array(sirali.map(\.kapanis).suffix(300))
+        guard let son = fiyatlar.last, son > 0,
+              let alt = t.altBant.last, let ust = t.ustBant.last else { return nil }
+
+        let h = Double(max(1, t.ufukGun))
+        // Bant genişliği → günlük eşdeğer belirsizlik (kıyasın en güçlü ayracı).
+        let gunlukBant = (ust - alt) / son * 100 / (2 * h.squareRoot())
+        let kisaVol = max(0.3, volYuzde(fiyatlar, pencere: 20))
+        let uzunVol = max(0.3, volYuzde(fiyatlar, pencere: 120))
+
+        let belirsizlikOran = gunlukBant / kisaVol            // ~1.5 dar, ~3+ geniş bölge
+        let belirsizlik = min(55, max(0, (belirsizlikOran - 1.2) * 35))
+        let rejim = min(30, max(0, (kisaVol / uzunVol - 1) * 60))
+        let likidite = likiditeCezasi(Array(sirali.suffix(300)))
+        let skor = min(100, belirsizlik + rejim + likidite)
+
+        let seviye: RiskSeviyesi = skor < 30 ? .dusuk : (skor < 55 ? .orta : .yuksek)
+        // Fren: riskle doğrusal, [0.55, 1] — tam risk bile diğer motorları söndürmez, kısar.
+        let fren = max(0.55, 1 - skor / 100 * 0.45)
+        let kotu = (alt - son) / son * 100
+
+        var parcalar: [String] = []
+        if belirsizlik >= 15 { parcalar.append("bant geniş") }
+        if rejim >= 10 { parcalar.append("oynaklık şişkin") }
+        if likidite >= 5 { parcalar.append("likidite zayıf") }
+        var gerekce = String(format: "%@ risk · kötü senaryo %%%.1f (%d gün)", seviye.rawValue, kotu, t.ufukGun)
+        if !parcalar.isEmpty { gerekce += " · " + parcalar.joined(separator: ", ") }
+
+        return Risk(skor: skor, seviye: seviye, frenCarpani: fren,
+                    kotuSenaryoYuzde: kotu, ufukGun: t.ufukGun, gerekce: gerekce, tahmin: t)
+    }
+
     // MARK: - Bağlam (piyasa geneli)
 
     /// Neptün'ün hisse dışına açılan gözü: endeks rejimi + kur şoku.
@@ -337,7 +398,12 @@ public struct Neptun: Motor {
     }
 
     private func sonVolatiliteYuzde(_ fiyatlar: [Double]) -> Double {
-        let pencere = min(20, fiyatlar.count - 1)
+        volYuzde(fiyatlar, pencere: 20)
+    }
+
+    /// Son `pencere` günün günlük getiri standart sapması (%).
+    private func volYuzde(_ fiyatlar: [Double], pencere istenen: Int) -> Double {
+        let pencere = min(istenen, fiyatlar.count - 1)
         guard pencere >= 2 else { return 0 }
         let kuyruk = Array(fiyatlar.suffix(pencere + 1))
         var getiriler: [Double] = []

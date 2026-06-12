@@ -28,8 +28,9 @@ final class PiyasaModel: ObservableObject {
     // MARK: - Ana sayfa skor seçimi (motor birleşimi)
 
     /// Listede anlık hesaplanabilen motorlar. (Satürn/Venüs hisse başına ağ
-    /// isteği gerektirdiğinden listede yok; detay sayfasında hesaplanır.)
-    static let listeMotorlari = ["Merkür", "Neptün", "Uranüs", "Jüpiter", "Mars", "Plüton"]
+    /// isteği gerektirdiğinden listede yok; Neptün yön oyu vermez — risk bekçisi,
+    /// detay sayfasında fren olarak çalışır.)
+    static let listeMotorlari = ["Merkür", "Uranüs", "Jüpiter", "Mars", "Plüton"]
 
     /// Ana sayfa skor kolonunda hangi motorların birleşimi gösterilsin.
     @Published var skorSecimi: Set<String> = ["Merkür"] {
@@ -46,7 +47,9 @@ final class PiyasaModel: ObservableObject {
         let katkilar = Self.listeMotorlari.filter { skorSecimi.contains($0) }
             .compactMap { katki(satir, motor: $0) }
         guard !katkilar.isEmpty else { return satir.sonuc.skor }
-        return Konsey.harmanla(katkilar, agirliklar: Konsey.varsayilanAgirliklar).skor
+        // VBTS tedbirli payda fiyat keşfi kısıtlı: resmi tedbir, fren kanalından işler.
+        let fren = TedbirListesi.guvenCarpani(tedbirler[satir.sembol] ?? [])
+        return Konsey.harmanla(katkilar, agirliklar: Konsey.varsayilanAgirliklar, fren: fren).skor
     }
 
     private func katki(_ satir: HisseSatiri, motor: String) -> Katki? {
@@ -61,13 +64,6 @@ final class PiyasaModel: ObservableObject {
         switch motor {
         case "Merkür":
             return Katki(motor: "Merkür", skor: satir.sonuc.skor, guven: satir.sonuc.guven, gerekce: satir.sonuc.verdict)
-        case "Neptün":
-            guard let t = Neptun().tahminEt(satir.mumlar, baglam: neptunBaglami()) else { return nil }
-            // VBTS tedbirli payda fiyat keşfi kısıtlı: güveni tedbir ağırlığınca kırp.
-            let carpan = TedbirListesi.guvenCarpani(tedbirler[satir.sembol] ?? [])
-            let gerekce = carpan < 1 ? "\(t.oneri.rawValue) · VBTS tedbiri" : t.oneri.rawValue
-            return Katki(motor: "Neptün", skor: max(0, min(100, 50 + t.degisimYuzde * 5)),
-                         guven: t.guven / 100 * carpan, gerekce: gerekce)
         case "Uranüs":
             guard !satir.endeksMi, let u = uranusSonucu(satir) else { return nil }
             return Katki(motor: "Uranüs", skor: u.skor, guven: 0.7, gerekce: u.aciklama)

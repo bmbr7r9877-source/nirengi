@@ -74,13 +74,29 @@ public struct Merkur: Motor {
         // değişmez ama güven kırpılır ve açıklamaya uyarı düşülür.
         let dusukLikidite = Merkur.ortalamaCiro(m) < (likiditeEsigi ?? 10_000_000)
 
+        // Hacim teyidi (backtest, zaman bölmeli doğrulama): yalnız yükseliş
+        // iddialarında sağlam — son 10 gün ort. hacmi önceki 50 güne oranla
+        // şişkinse (≥1.3, üst çeyrek) yükseliş teyitli, cılızsa (≤0.8, alt
+        // çeyrek) "boş yükseliş" şüphesi. Düşüş tarafında bilgi taşımıyor.
+        var hacimNotu = ""
+        var hacimAyari = 0.0
+        if skor > 50, m.count >= 60 {
+            let son10 = m.suffix(10).map(\.hacim).reduce(0, +) / 10
+            let onceki50 = m.dropLast(10).suffix(50).map(\.hacim).reduce(0, +) / 50
+            if onceki50 > 0 {
+                let oran = son10 / onceki50
+                if oran >= 1.3 { hacimAyari = 0.1; hacimNotu = " · Hacim teyitli" }
+                else if oran <= 0.8 { hacimAyari = -0.1; hacimNotu = " · Hacimsiz yükseliş" }
+            }
+        }
+
         let bilesenler = Bilesenler(
             trend: t.skor, momentum: mom.skor, volatilite: vol.skor,
             rsi: mom.rsi, adx: adx,
             aciklama: "\(t.aciklama) · \(mom.aciklama) · \(vol.aciklama)"
-                + (dusukLikidite ? " · Düşük hacim" : "")
+                + hacimNotu + (dusukLikidite ? " · Düşük hacim" : "")
         )
-        var g = guven(bilesenler, skor: skor)
+        var g = min(1.0, max(0.3, guven(bilesenler, skor: skor) + hacimAyari))
         if dusukLikidite { g = max(0.3, g - 0.2) }
         return Sonuc(skor: skor, verdict: verdict(skor), guven: g, bilesenler: bilesenler)
     }
