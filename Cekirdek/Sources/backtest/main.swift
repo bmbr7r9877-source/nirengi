@@ -29,8 +29,13 @@ guard let xu100 = yukle(klasor.appendingPathComponent("XU100.json")) else {
 let xuTarihler = xu100.map(\.tarih)
 
 struct Gozlem {
+    let tarih: Date
     let skor: Double
     let guven: Double
+    let trend: Double
+    let momentum: Double
+    let volatilite: Double
+    let adx: Double?
     let getiri: Double      // hissenin 10 işlem günü sonraki % getirisi
     let endeksGetiri: Double
     var fark: Double { getiri - endeksGetiri }
@@ -61,7 +66,11 @@ for dosya in dosyalar where dosya.lastPathComponent != "XU100.json" {
             let e0 = xu100[xuIdx].kapanis
             let e1 = xu100[xuIdx + ufuk].kapanis
             if f0 > 0, e0 > 0 {
-                gozlemler.append(Gozlem(skor: s.skor, guven: s.guven,
+                gozlemler.append(Gozlem(tarih: bugun, skor: s.skor, guven: s.guven,
+                                        trend: s.bilesenler.trend,
+                                        momentum: s.bilesenler.momentum,
+                                        volatilite: s.bilesenler.volatilite,
+                                        adx: s.bilesenler.adx,
                                         getiri: (f1 - f0) / f0 * 100,
                                         endeksGetiri: (e1 - e0) / e0 * 100))
             }
@@ -106,8 +115,25 @@ func pearson(_ x: [Double], _ y: [Double]) -> Double {
 let ic = pearson(gozlemler.map(\.skor), gozlemler.map(\.fark))
 print(String(format: "\nBilgi katsayısı (skor ↔ endekse göre fark): %.4f", ic))
 
-print("\n— Güven dilimlerine göre (skor 60+ gözlemler) —")
-let yuksekSkor = gozlemler.filter { $0.skor > 60 }
-ozet(" güven <0.6 ", yuksekSkor.filter { $0.guven < 0.6 })
-ozet(" güven 0.6-0.8", yuksekSkor.filter { $0.guven >= 0.6 && $0.guven < 0.8 })
-ozet(" güven 0.8+  ", yuksekSkor.filter { $0.guven >= 0.8 })
+// Güven doğrulaması: yön iddialı gözlemlerde (|skor-50| ≥ 5), "skorun dediği
+// yönde gerçekleşen fark" güvenle birlikte artıyor mu?
+print("\n— Güven dilimlerine göre yönlü kazanç (|skor-50| ≥ 5) —")
+let yonlu = gozlemler.filter { abs($0.skor - 50) >= 5 }
+func yonluKazanc(_ ad: String, _ g: [Gozlem]) {
+    guard !g.isEmpty else { print("\(ad): gözlem yok"); return }
+    let k = g.map { ($0.skor > 50 ? 1.0 : -1.0) * $0.fark }.reduce(0, +) / Double(g.count)
+    print(String(format: "%@  n=%5d  ort yönlü kazanç %%%6.3f", ad, g.count, k))
+}
+yonluKazanc(" güven <0.70 ", yonlu.filter { $0.guven < 0.70 })
+yonluKazanc(" güven =0.70 ", yonlu.filter { $0.guven >= 0.70 && $0.guven < 0.705 })
+yonluKazanc(" güven 0.70+ ", yonlu.filter { $0.guven >= 0.705 })
+
+// Ham gözlemleri analize dök: güven formülü adayları bu CSV üzerinde sınanır.
+var csv = "tarih,skor,guven,trend,momentum,volatilite,adx,getiri,fark\n"
+for g in gozlemler {
+    let adxStr = g.adx.map { String(format: "%.2f", $0) } ?? ""
+    csv += String(format: "%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%@,%.3f,%.3f\n",
+                  g.tarih.timeIntervalSince1970, g.skor, g.guven, g.trend, g.momentum, g.volatilite, adxStr, g.getiri, g.fark)
+}
+try? csv.write(toFile: "/tmp/merkur_gozlem.csv", atomically: true, encoding: .utf8)
+print("\nCSV: /tmp/merkur_gozlem.csv")

@@ -80,7 +80,7 @@ public struct Merkur: Motor {
             aciklama: "\(t.aciklama) · \(mom.aciklama) · \(vol.aciklama)"
                 + (dusukLikidite ? " · Düşük hacim" : "")
         )
-        var g = guven(bilesenler)
+        var g = guven(bilesenler, skor: skor)
         if dusukLikidite { g = max(0.3, g - 0.2) }
         return Sonuc(skor: skor, verdict: verdict(skor), guven: g, bilesenler: bilesenler)
     }
@@ -245,13 +245,17 @@ public struct Merkur: Motor {
         }
     }
 
-    private func guven(_ b: Bilesenler) -> Double {
-        // Bacaklar aynı yönde + ADX verisi varsa güven yüksek.
-        let yonler = [b.trend, b.momentum].map { $0 >= 50 }
-        let uyum = yonler.allSatisfy { $0 } || yonler.allSatisfy { !$0 }
-        var g = 0.6
-        if b.adx != nil { g += 0.1 }
-        if uyum { g += 0.2 }
+    /// Güven, backtest ile kuruldu (BIST 100, 5y, ~17k gözlem, zaman bölmeli
+    /// doğrulama). Bulgular: bacak uyuşması ve skor aşırılığı isabeti
+    /// ÖNGÖRMÜYOR (eski formülün temeliydi, kaldırıldı). Görmediği dönemde de
+    /// hayatta kalan tek desen: düşüş iddiası + trendsiz piyasa (düşük ADX)
+    /// belirgin isabetli. Gerisi için dürüst sabit taban.
+    private func guven(_ b: Bilesenler, skor: Double) -> Double {
+        guard let adx = b.adx else { return 0.6 }   // rejim ölçülemiyor
+        var g = 0.7
+        if skor < 50 {
+            g += 0.15 * min(1, max(0, (20 - adx) / 10))   // ADX 20→10: +0→+0.15
+        }
         return min(1.0, g)
     }
 }

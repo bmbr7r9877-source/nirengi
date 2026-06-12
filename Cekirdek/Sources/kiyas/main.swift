@@ -83,9 +83,28 @@ struct Olcum: Sendable {
 
 func ort(_ d: [Double]) -> Double { d.isEmpty ? 0 : d.reduce(0, +) / Double(d.count) }
 
+// MARK: - Bekçi ölçümü (Neptün = risk freni hipotezi)
+//
+// Soru: Neptün'ün risk sinyalleri (bant genişliği, düşük güven, limit/kur bayrağı)
+// gerçekten "mayınlı" noktaları mı işaretliyor? Ve Merkür'ün Al sinyallerini
+// bu frenle süzmek net getiriyi iyileştiriyor mu?
+
+struct BekciKayit: Sendable {
+    let bantYuzde: Double       // ufuk-sonu bant genişliği / fiyat ×100 (belirsizlik)
+    let guven: Double           // Neptün güveni
+    let bayrakli: Bool          // gerekçede limit serisi / kur şoku / endeks rejimi
+    let getiri: Double          // gerçekleşen h-gün %
+    let dusus: Double           // h penceresi içindeki en kötü kapanış % (≤0)
+    let bantIcinde: Bool        // gerçek, [alt,üst] bandında kaldı mı
+    let merkurSkor: Double?
+}
+
 // MARK: - Tek sembol koşusu
 
-struct SembolSonuc: Sendable { var varyantlar: [String: Olcum] }
+struct SembolSonuc: Sendable {
+    var varyantlar: [String: Olcum]
+    var bekci: [BekciKayit] = []
+}
 
 func kos(_ mumlar: [Mum], endeks: [Mum], usdtry: [Mum]) -> SembolSonuc {
     let maliyet = 0.5
@@ -128,6 +147,21 @@ func kos(_ mumlar: [Mum], endeks: [Mum], usdtry: [Mum]) -> SembolSonuc {
             if tah.oneri == .al { o.alGetirileri.append(gercekDegisim - maliyet) }
             if tah.oneri == .sat { o.satGetirileri.append(-gercekDegisim - maliyet) }
             sonuc.varyantlar[ad] = o
+
+            // Bekçi kaydı (tam donanımlı varyant üzerinden, sızıntısız Merkür ile).
+            if ad == "bist+baglam", let alt = tah.altBant.last, let ust = tah.ustBant.last {
+                let pencere = bars[t..<min(t + h, bars.count)].map(\.kapanis)
+                let dusus = (pencere.min() ?? simdiki) / simdiki * 100 - 100
+                let bayrak = tah.gerekce.contains("limit serisi") || tah.gerekce.contains("kur şoku")
+                    || tah.gerekce.contains("endeks düşüş")
+                let sonTarih = egitim.last!.tarih
+                let mSkor = Merkur().degerlendir(egitim, endeks: endeks.filter { $0.tarih <= sonTarih })?.skor
+                sonuc.bekci.append(BekciKayit(bantYuzde: (ust - alt) / simdiki * 100,
+                                              guven: tah.guven, bayrakli: bayrak,
+                                              getiri: gercekDegisim, dusus: min(0, dusus),
+                                              bantIcinde: gercek >= alt && gercek <= ust,
+                                              merkurSkor: mSkor))
+            }
         }
         // Naif taban çizgisi: yarın = bugün (aynı ufukta MAPE).
         if let h = ortakUfuk, t + h - 1 < bars.count {
@@ -170,6 +204,7 @@ func kos(_ mumlar: [Mum], endeks: [Mum], usdtry: [Mum]) -> SembolSonuc {
             return hepsi
         }
         for s in sonuclar { for (ad, o) in s.varyantlar { toplam[ad]?.birlestir(o) } }
+        let kayitlar = sonuclar.flatMap(\.bekci)
 
         print("VARYANT        | Yön%  | MAPE% | Al n / net%ort | Sat n / net%ort")
         print(String(repeating: "-", count: 70))
@@ -183,5 +218,62 @@ func kos(_ mumlar: [Mum], endeks: [Mum], usdtry: [Mum]) -> SembolSonuc {
         }
         print("\nNot: Yön% = sıfır-olmayan tahminlerde isabet (50 = yazı-tura).")
         print("Al/Sat net% = sinyal sonrası ufuk getirisi, %0.5 maliyet düşülmüş.")
+
+        bekciRaporu(kayitlar)
+    }
+
+    // MARK: - Bekçi raporu
+
+    static func bekciRaporu(_ kayitlar: [BekciKayit]) {
+        guard kayitlar.count >= 30 else { print("\n(Bekçi: yetersiz kayıt)"); return }
+        print("\n══ BEKÇİ ÖLÇÜMÜ (Neptün risk freni, n=\(kayitlar.count)) ══")
+
+        let kapsama = Double(kayitlar.filter(\.bantIcinde).count) / Double(kayitlar.count) * 100
+        print(String(format: "Bant kapsaması: %%%.1f (hedef ~90 — q90×1.2 bandı)", kapsama))
+
+        func dilimRapor(_ baslik: String, _ gruplar: [(String, [BekciKayit])]) {
+            print("\n\(baslik)  (n · ort getiri% · ort düşüş% · en kötü%)")
+            for (ad, g) in gruplar where !g.isEmpty {
+                print(String(format: "  %-12@ %4d · %+5.2f · %+5.2f · %+6.2f", ad as NSString, g.count,
+                             ort(g.map(\.getiri)), ort(g.map(\.dusus)), g.map(\.getiri).min() ?? 0))
+            }
+        }
+
+        // 1) Bant genişliği tertilleri: geniş bant gerçekten daha oynak/mayınlı mı?
+        let bantSirali = kayitlar.sorted { $0.bantYuzde < $1.bantYuzde }
+        let u = bantSirali.count / 3
+        dilimRapor("Bant genişliği (belirsizlik) tertilleri:",
+                   [("dar", Array(bantSirali[0..<u])), ("orta", Array(bantSirali[u..<2*u])),
+                    ("geniş", Array(bantSirali[(2*u)...]))])
+
+        // 2) Güven tertilleri: düşük güven kötü bölgeyi mi işaretliyor?
+        let guvenSirali = kayitlar.sorted { $0.guven > $1.guven }
+        dilimRapor("Neptün güveni tertilleri:",
+                   [("yüksek", Array(guvenSirali[0..<u])), ("orta", Array(guvenSirali[u..<2*u])),
+                    ("düşük", Array(guvenSirali[(2*u)...]))])
+
+        // 3) Bayraklılar (limit serisi / kur şoku / endeks rejimi) vs temizler.
+        dilimRapor("Rejim bayrağı:",
+                   [("bayraklı", kayitlar.filter(\.bayrakli)), ("temiz", kayitlar.filter { !$0.bayrakli })])
+
+        // 4) Fren simülasyonu: Merkür Al (skor ≥ 60) net getirisi, frenli/frensiz.
+        let maliyet = 0.5
+        let allar = kayitlar.filter { ($0.merkurSkor ?? 0) >= 60 }
+        guard !allar.isEmpty else { print("\nFren testi: Merkür Al sinyali yok."); return }
+        let genisEsik = bantSirali[2*u].bantYuzde       // geniş tertil sınırı
+        let dusukEsik = guvenSirali[2*u].guven          // düşük güven tertil sınırı
+        let frenli = allar.filter { !$0.bayrakli && $0.bantYuzde < genisEsik && $0.guven > dusukEsik }
+        print("\nFren testi — Merkür Al (skor≥60), net% (maliyet düşülmüş):")
+        print(String(format: "  frensiz   %4d işlem · ort %+5.2f · ort düşüş %+5.2f · en kötü %+6.2f",
+                     allar.count, ort(allar.map(\.getiri)) - maliyet,
+                     ort(allar.map(\.dusus)), allar.map(\.getiri).min() ?? 0))
+        print(String(format: "  frenli    %4d işlem · ort %+5.2f · ort düşüş %+5.2f · en kötü %+6.2f",
+                     frenli.count, ort(frenli.map(\.getiri)) - maliyet,
+                     ort(frenli.map(\.dusus)), frenli.map(\.getiri).min() ?? 0))
+        let engellenen = allar.filter { k in !frenli.contains { $0.getiri == k.getiri && $0.guven == k.guven } }
+        if !engellenen.isEmpty {
+            print(String(format: "  engellenen %3d işlem · ort %+5.2f  ← fren haklıysa bu, frenliden KÖTÜ olmalı",
+                         engellenen.count, ort(engellenen.map(\.getiri)) - maliyet))
+        }
     }
 }
